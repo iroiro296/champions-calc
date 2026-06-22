@@ -1,0 +1,35 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# チームスキャンの参考スクショ（カナOCR辞書は src/champKanaData.js に焼き込み済み。再学習用に手元保管・非コミット）
+refshots
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# 持ち物アイコン素材(作業用・抽出元: 持ち物一覧.zip)
+public/_itemtmp
+
+# 作業用・テスト用・バックアップ（手元には残すが公開リポジトリには含めない）
+_work
+test-fixtures
+*.bak
