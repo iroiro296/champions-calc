@@ -985,7 +985,8 @@ export default function ChampionsDamageCalc() {
     if (!moveList.find((m) => m.name === moveName)) setMoveName(moveList[0]?.name ?? "");
   }, [moveList]);
 
-  const [moveHist, setMoveHist] = useState({});
+  const [moveHist, setMoveHist] = useState(() => { try { return JSON.parse(localStorage.getItem("championsMoveHist")) || {}; } catch { return {}; } }); // 技の履歴は対戦・再読込を跨いでずっと保持
+  useEffect(() => { try { localStorage.setItem("championsMoveHist", JSON.stringify(moveHist)); } catch {} }, [moveHist]);
 
   // 最近選択したポケモンの履歴（攻撃側・防御側それぞれ最新順8匹）
   const [atkPokeHist, setAtkPokeHist] = useState([]);
@@ -1359,15 +1360,15 @@ export default function ChampionsDamageCalc() {
     if (hist?.[0] && attacker.learnset.includes(hist[0])) setMoveName(hist[0]);
   }, [atkIdx]);
 
-  // 使った技をポケモンごとに最新順で記憶（切替直後の旧技名は learnset チェックで弾く）
-  useEffect(() => {
-    if (!attacker.learnset.includes(moveName)) return;
+  // 技を履歴に記録：ユーザーが明示的に選んだ時だけ呼ぶ。デフォで自動選択された技は記録しない＝変更しても履歴に残らない。
+  const recordMove = (name) => {
+    if (!attacker.learnset.includes(name)) return;
     setMoveHist((prev) => {
       const hist = prev[attacker.name] ?? [];
-      if (hist[0] === moveName) return prev;
-      return { ...prev, [attacker.name]: [moveName, ...hist.filter((n) => n !== moveName)].slice(0, 8) };
+      if (hist[0] === name) return prev;
+      return { ...prev, [attacker.name]: [name, ...hist.filter((n) => n !== name)].slice(0, 8) };
     });
-  }, [moveName, attacker]);
+  };
 
   const removeRecent = (name) => {
     setMoveHist((prev) => ({ ...prev, [attacker.name]: (prev[attacker.name] ?? []).filter((n) => n !== name) }));
@@ -2157,7 +2158,7 @@ export default function ChampionsDamageCalc() {
                   <div className="recent-row">
                     {recentMoves.map((n) => (
                       <span key={n} className={n === moveName ? "recent-chip on" : "recent-chip"}>
-                        <span className="recent-chip-name" onClick={() => setMoveName(n)}>{n}</span>
+                        <span className="recent-chip-name" onClick={() => { setMoveName(n); recordMove(n); }}>{n}</span>
                         <button className="recent-chip-x" onClick={() => removeRecent(n)} aria-label={`${n}を履歴から削除`}>✕</button>
                       </span>
                     ))}
@@ -2165,7 +2166,7 @@ export default function ChampionsDamageCalc() {
                 )}
                 {!customOn && (
                   <MoveSearch
-                    moveList={moveList} value={moveName} onChange={setMoveName} accent={accent}
+                    moveList={moveList} value={moveName} onChange={(n) => { setMoveName(n); recordMove(n); }} accent={accent}
                     chipType={effType}
                     meta={isFixedMove ? `${move.c} / 固定${fixedDmgVal}ダメージ` : `${move.c} / 威力${effPower}${move.ws && weather !== "なし" ? "（天気で変化）" : ""}${isMulti ? ` ×${result.hitLabel}回` : ""}`}
                   />
