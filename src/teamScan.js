@@ -54,8 +54,20 @@ export function saveTextTemplate(kind, name, bytes) {
 function bboxOf(d, yc, xa, xb, thr = 185) {
   // thr=明度しきい値。概要画面は半透明のスロット番号(1〜6)が右下に薄く重なる(明度≤188)ので、純白文字(254)だけ拾う高threで枠汚染を防ぐ。
   const txt = (x, y) => { const o = (y * 1920 + x) * 4; return d[o] > thr && d[o + 1] > thr && d[o + 2] > thr && (Math.max(d[o], d[o + 1], d[o + 2]) - Math.min(d[o], d[o + 1], d[o + 2])) < 42; };
+  // yc±26 窓の各行の白画素数を数え、白行が連続する「ラン(塊)」に分けて、総白画素が最大のラン＝文字本体だけに縦範囲を絞る。
+  // 明るい取り込みではセル下端の白い枠線やスロット番号の縁(純白なのでthrでは消せない)が窓に紛れ、bboxが縦横に膨らんで
+  // 文字数推定(W/L)が壊れ技が読めなくなっていた。枠線は薄い別ランなので、最大ランに絞れば文字帯だけが残る。
+  const yTop = yc - 26, yBot = yc + 26, rc = [];
+  for (let y = yTop; y <= yBot; y++) { let c = 0; for (let x = xa; x <= xb; x++) if (txt(x, y)) c++; rc.push(c); }
+  let bestSum = 0, bestA = -1, bestB = -1, rs = -1, rsum = 0;
+  for (let i = 0; i <= rc.length; i++) {
+    const on = i < rc.length && rc[i] >= 2;
+    if (on) { if (rs < 0) { rs = i; rsum = 0; } rsum += rc[i]; }
+    else if (rs >= 0) { if (rsum > bestSum) { bestSum = rsum; bestA = rs; bestB = i - 1; } rs = -1; }
+  }
+  if (bestA < 0) return null;
   let x0 = 1e9, x1 = -1, y0 = 1e9, y1 = -1;
-  for (let y = yc - 26; y <= yc + 26; y++) for (let x = xa; x <= xb; x++) if (txt(x, y)) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
+  for (let y = yTop + bestA; y <= yTop + bestB; y++) for (let x = xa; x <= xb; x++) if (txt(x, y)) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
   return x1 < 0 ? null : { x0, y0, x1, y1, w: x1 - x0 + 1, h: y1 - y0 + 1 };
 }
 function normMask(b) {
