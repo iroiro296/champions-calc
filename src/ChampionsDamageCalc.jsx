@@ -10,6 +10,18 @@ import FeedbackPanel from "./FeedbackPanel.jsx";
 import ObsPanel from "./ObsPanel.jsx";
 import { itemEffect, itemLabel } from "./item-data.js";
 
+// モーダル背景の誤クローズ防止: 押下と離した両方が「背景そのもの」の時だけ閉じる。
+// 入力欄内で押し始めてモーダル外で離す(数値のドラッグ選択など)と、clickが共通祖先＝背景で発火して
+// 誤って閉じてしまう。押下位置を記録し、背景上で始まったクリックのみ閉じることで防ぐ。
+let _backdropDownOnSelf = false;
+const dismissOnBackdrop = (close) => ({
+  onMouseDown: (e) => { _backdropDownOnSelf = e.target === e.currentTarget; },
+  onClick: (e) => { if (_backdropDownOnSelf && e.target === e.currentTarget) close(); },
+});
+
+// 公開直後だけ表示するお知らせバナー。安定したら false にする（または定数とバナーJSXを削除）。
+const SHOW_RELEASE_NOTICE = true;
+
 // ===== ポケモンチャンピオンズ仕様 =====
 // ・Lv50固定 / 個体値31固定 / 能力ポイント(SP): 1ステ上限32・合計上限66
 // ・HP実数値   = floor((種族値*2+31)*50/100) + 60 + SP
@@ -336,6 +348,43 @@ function SpInput({ label, value, onChange }) {
         ))}
       </div>
     </label>
+  );
+}
+
+// 推定モーダルの数値入力: 標準スピナーが小さく押しづらいので、大きな −／＋ ボタンで増減（長押しで連続）。
+function NumStepper({ value, onChange, min = 0, max = Infinity, placeholder }) {
+  const holdRef = useRef(null);
+  const upRef = useRef(null);
+  const stop = () => {
+    if (holdRef.current) { clearTimeout(holdRef.current); holdRef.current = null; }
+    if (upRef.current) { upRef.current(); upRef.current = null; }
+  };
+  useEffect(() => stop, []); // アンマウント時に停止
+  // 連打中も最新値から増減するよう関数更新（onChange=setState）。空欄からは＋で下限・−でも下限に収める。
+  const step = (d) => onChange((prev) => {
+    const n = parseInt(prev, 10);
+    const base = isNaN(n) ? (d > 0 ? min - 1 : min) : n;
+    return String(Math.max(min, Math.min(max, base + d)));
+  });
+  const startHold = (d) => {
+    stop();
+    step(d); // 押した瞬間に1回
+    let delay = 380; // 長押し開始までの待ち→以降は加速
+    const tick = () => { step(d); delay = Math.max(45, delay * 0.82); holdRef.current = setTimeout(tick, delay); };
+    holdRef.current = setTimeout(tick, delay);
+    const onUp = () => stop(); // どこで指を離しても止める
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+    upRef.current = () => { window.removeEventListener("pointerup", onUp); window.removeEventListener("pointercancel", onUp); };
+  };
+  return (
+    <div className="num-step">
+      <button type="button" className="num-step-btn" onPointerDown={() => startHold(-1)} aria-label="1減らす（長押しで連続）">−</button>
+      <input type="number" inputMode="numeric" step="1" min={min} max={max === Infinity ? undefined : max}
+        placeholder={placeholder} value={value}
+        onChange={(e) => onChange(e.target.value.replace(/[.,].*$/, ""))} />
+      <button type="button" className="num-step-btn" onPointerDown={() => startHold(1)} aria-label="1増やす（長押しで連続）">＋</button>
+    </div>
   );
 }
 
@@ -667,7 +716,7 @@ function SpeedCompare({ ownName, ownBaseS, ownMember, enemyName, enemyBaseS, sta
   const ownFinal = spd === "" ? null : mod(Number(spd) || 0, oRank, oScarf, oPara, oBoost); // 空欄なら判定しない
   const pats = [["最速", stat(enemyBaseS, 32, 1.1)], ["準速", stat(enemyBaseS, 32, 1.0)], ["無振り", stat(enemyBaseS, 0, 1.0)], ["最遅", stat(enemyBaseS, 0, 0.9)]];
   return (
-    <div className="modal-backdrop modal-top" onClick={onClose}>
+    <div className="modal-backdrop modal-top" {...dismissOnBackdrop(onClose)}>
       <section className="result modal spd-modal" onClick={(e) => e.stopPropagation()}>
         <button className="modal-close" onClick={onClose} aria-label="閉じる">✕</button>
         <p className="vs" style={{ marginBottom: 10 }}><b>⚡ すばやさ比較</b>　補正をかけた素早さ実数値で、自分が相手の各振り方を抜けるか判定します</p>
@@ -704,6 +753,8 @@ function SpeedCompare({ ownName, ownBaseS, ownMember, enemyName, enemyBaseS, sta
 
 export default function ChampionsDamageCalc() {
   const [view, setView] = useState("calc"); // "obs"=OBS接続 / "calc"=ダメージ計算 / "team"=マイチーム登録 / "feedback"
+  const [noticeDismissed, setNoticeDismissed] = useState(() => { try { return localStorage.getItem("championsReleaseNoticeDismissed") === "1"; } catch { return false; } });
+  const dismissNotice = () => { setNoticeDismissed(true); try { localStorage.setItem("championsReleaseNoticeDismissed", "1"); } catch {} };
   const myTeams = useMyTeams(); // 計算タブのチームバーとマイチームタブで状態を共有（タブ切替でズレない）
   const obs = useObs();         // OBS接続を全タブで共有（接続自体は親=常時マウントなのでタブ切替で切れない）
   // 共通ライブプレビュー: 取得ループを親に1個だけ持つ＝タブを跨いでも死なない。OBSタブとマイチームタブで共有（同じcanvas refを渡す＝表示中の方に描画）。
@@ -1706,6 +1757,15 @@ export default function ChampionsDamageCalc() {
         h1{font-size:20px;font-weight:800;letter-spacing:.04em;margin:0}
         .sub{font-size:11px;color:#7c879c}
         .spec{font-size:11px;color:#7c879c;margin:0 0 6px}
+        /* 公開直後のお知らせバナー（SHOW_RELEASE_NOTICEで制御） */
+        .release-notice{display:flex;align-items:flex-start;gap:12px;margin:2px 0 12px;padding:13px 15px;background:linear-gradient(90deg,rgba(255,150,60,.17),rgba(255,120,60,.06));border:1px solid rgba(255,150,70,.5);border-left:4px solid #ff8a3c;border-radius:11px}
+        .release-notice-icon{font-size:24px;line-height:1.25;flex:none}
+        .release-notice-body{flex:1;margin:0;font-size:14.5px;line-height:1.65;color:#ffe6cb}
+        .release-notice-body b{color:#ffd49a;font-size:15.5px}
+        .release-notice-link{background:none;border:0;color:#ffd089;font-weight:800;cursor:pointer;font-size:14.5px;text-decoration:underline;padding:0 1px}
+        .release-notice-link:hover{color:#fff}
+        .release-notice-x{flex:none;background:none;border:0;color:#caa07a;font-size:16px;cursor:pointer;padding:2px 5px;line-height:1}
+        .release-notice-x:hover{color:#fff}
         /* タブ */
         .tabs{display:flex;gap:4px;margin:0 0 8px;border-bottom:1px solid #232d44}
         .tab{appearance:none;background:none;border:0;border-bottom:2px solid transparent;color:#8fa0bd;font-size:13px;font-weight:700;letter-spacing:.04em;padding:9px 16px 10px;cursor:pointer;display:flex;align-items:center;gap:7px;margin-bottom:-1px;transition:color .15s,border-color .15s}
@@ -1975,12 +2035,27 @@ export default function ChampionsDamageCalc() {
         .result.modal > .modal-close{position:absolute;top:10px;right:12px;z-index:2;background:none;border:0;color:#8fa0bd;font-size:18px;cursor:pointer;padding:4px}
         .modal-close:hover{color:#fff}
         .modal .infer-table{max-height:46vh}
-        .infer-table{margin-top:10px;max-height:220px;overflow-y:auto;border:1px solid #232d44;border-radius:8px}
-        .infer-row{display:grid;grid-template-columns:1fr 1fr 1.4fr;padding:5px 12px;font-size:12px;color:#c4cede;font-variant-numeric:tabular-nums;border-bottom:1px solid #1a2236}
+        .infer-table{margin-top:10px;max-height:46vh;overflow-y:auto;border:1px solid #232d44;border-radius:8px}
+        .infer-row{display:grid;justify-items:center;grid-template-columns:1fr 1fr 1.3fr;padding:8px 14px;font-size:14px;color:#c4cede;font-variant-numeric:tabular-nums;border-bottom:1px solid #1a2236}
         .infer-row:last-child{border-bottom:0}
         .infer-click{cursor:pointer}
         .infer-click:hover{background:#1e2840}
-        .infer-head{font-size:11px;color:#8fa0bd;letter-spacing:.06em;background:#0e1320;position:sticky;top:0}
+        .infer-head{font-size:12.5px;color:#8fa0bd;letter-spacing:.06em;background:#0e1320;position:sticky;top:0}
+        /* 推定モーダル内は全体的に文字を大きめに（スピード比較モーダルは除外） */
+        .modal:not(.spd-modal) .vs{font-size:14px;line-height:1.65}
+        .modal:not(.spd-modal) .stat-line{font-size:13px}
+        .modal:not(.spd-modal) .stat-line b{font-size:14.5px}
+        .modal:not(.spd-modal) .field-label{font-size:12.5px}
+        .modal:not(.spd-modal) .ck{font-size:13.5px}
+        .modal:not(.spd-modal){width:min(430px,94vw)} /* 推定モーダルは縦長に（表が左寄せにならずモーダル幅いっぱいに収まる） */
+        /* 数値の −／＋ ステッパー（標準スピナーより押しやすい大きめボタン） */
+        .num-step{display:inline-flex;align-items:stretch;gap:5px}
+        .num-step input{width:64px;text-align:center;font-size:15px}
+        .num-step input::-webkit-inner-spin-button,.num-step input::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
+        .num-step input[type=number]{-moz-appearance:textfield;appearance:textfield}
+        .num-step-btn{flex:none;width:40px;border:1px solid #35506b;background:#23304a;color:#cfe0ff;border-radius:7px;cursor:pointer;font-size:23px;line-height:1;padding:0;font-weight:700;touch-action:none;user-select:none;-webkit-user-select:none}
+        .num-step-btn:hover{border-color:var(--brand);background:#28365280}
+        .num-step-btn:active{background:#33456b}
         footer{margin-top:22px;font-size:11px;color:#5a6478;line-height:1.7}
       `}</style>
 
@@ -2019,6 +2094,18 @@ export default function ChampionsDamageCalc() {
           </div>
         </header>
         <p className="spec">能力ポイント(SP)は 1ステータス上限32・合計上限66。1SP = 実数値+1。チャンピオンズで習得可能な攻撃技を全収録（{POKEMON.length}匹・{Object.keys(M).length}技）。</p>
+
+        {SHOW_RELEASE_NOTICE && !noticeDismissed && (
+          <div className="release-notice">
+            <span className="release-notice-icon" aria-hidden="true">🚧</span>
+            <p className="release-notice-body">
+              <b>リリースしたてです！</b> 不具合や不便な点がまだ多いと思います。お気づきの点があれば
+              <button type="button" className="release-notice-link" onClick={() => setView("feedback")}>💬 フィードバックタブ</button>
+              からお気軽にご報告ください 🙏
+            </p>
+            <button type="button" className="release-notice-x" onClick={dismissNotice} aria-label="このお知らせを閉じる">✕</button>
+          </div>
+        )}
 
         <div className="tabs">
           <button className={view === "obs" ? "tab on" : "tab"} onClick={() => setView("obs")}>🎬 OBS{obs.connected ? " 🟢" : ""}</button>
@@ -2271,9 +2358,12 @@ export default function ChampionsDamageCalc() {
                   </select>
                 </div>
               )}
-              <button className="swap" style={{ width: "100%" }} onClick={() => setShowAtkInference(true)}>
-                ⚔ 攻撃力推定
-              </button>
+              {/* 攻撃力推定は相手側のポケのみ（攻撃側が右パネル＝敵の時だけ表示。自分の攻撃は逆算不要） */}
+              {atkOnRight && (
+                <button className="swap" style={{ width: "100%" }} onClick={() => setShowAtkInference(true)}>
+                  ⚔ 攻撃力推定
+                </button>
+              )}
               <SpInput label={`${atkStatLabel}SP`} value={atkSp} onChange={setAtkSp} />
               <div className="field">
                 <span className="field-label">性格補正</span>
@@ -2365,9 +2455,12 @@ export default function ChampionsDamageCalc() {
                   {DEF_ITEMS.map((x) => <option key={x} value={x}>{x}</option>)}
                 </select>
               </div>
-              <button className="swap" style={{ width: "100%" }} onClick={() => setShowInference(true)}>
-                🛡 耐久力推定
-              </button>
+              {/* 耐久力推定は相手側のポケのみ（防御側が右パネル＝敵の時だけ表示。自分の耐久は逆算不要） */}
+              {!atkOnRight && (
+                <button className="swap" style={{ width: "100%" }} onClick={() => setShowInference(true)}>
+                  🛡 耐久力推定
+                </button>
+              )}
               <SpInput label="HP SP" value={hpSp} onChange={setHpSp} />
               {defPhys
                 ? <SpInput label="ぼうぎょSP" value={bSp} onChange={setBSp} />
@@ -2589,16 +2682,14 @@ export default function ChampionsDamageCalc() {
           enemyName={spdEnemy.name} enemyBaseS={spdEnemy.base.s} stat={stat} onClose={() => setShowSpeed(false)} />}
 
         {/* ===== 逆算2: 被ダメ実数値から相手の攻撃を推定（モーダル表示） ===== */}
-        {showAtkInference && <div className="modal-backdrop modal-top" onClick={() => setShowAtkInference(false)}>
+        {showAtkInference && <div className="modal-backdrop modal-top" {...dismissOnBackdrop(() => setShowAtkInference(false))}>
         <section className="result modal" onClick={(e) => e.stopPropagation()}>
           <button className="modal-close" onClick={() => setShowAtkInference(false)} aria-label="閉じる">✕</button>
           <p className="vs" style={{ marginBottom: 8 }}><b>攻撃力推定</b>　{attacker.name}の{move.name}で受けたダメージ（実数値）から、相手の{atkStatLabel}SP・性格補正を逆算します。防御側（自分）のステータスと場の状態は現在の設定を使用</p>
           <div className="row" style={{ marginTop: 0 }}>
             <div className="field">
               <span className="field-label">受けたダメージ（実数値）</span>
-              <input type="number" step="1" min="1" style={{ width: 90 }}
-                placeholder="例: 87" value={dmgTaken}
-                onChange={(e) => setDmgTaken(e.target.value.replace(/[.,].*$/, ""))} />
+              <NumStepper value={dmgTaken} onChange={setDmgTaken} min={1} placeholder="例: 87" />
             </div>
           </div>
           <div className="row" style={{ marginTop: 6, alignItems: "center", gap: 8 }}>
@@ -2609,10 +2700,11 @@ export default function ChampionsDamageCalc() {
             </div>
             <span className="cond-note">{atkInferItem === "unknown" ? "不明: なし＋タイプ強化を両方表示" : atkInferItem === "orb" ? "いのちのたま(×1.3)で逆算（持ち物欄もいのちのたまに）" : "威力強化系ではないことが判明"}</span>
           </div>
-          <label className="ck" style={{ marginTop: 4 }}>
+          <label className="ck" style={{ marginTop: 4, fontSize: 11.5 }}>
             <input type="checkbox" checked={excludeDownNat} onChange={(e) => setExcludeDownNat(e.target.checked)} />
             下降補正(▼0.9)を除外
           </label>
+          <p style={{ fontSize: 12, color: "#8a93a8", margin: "3px 0 0", lineHeight: 1.5 }}>※ 下降補正でしか一致しない場合は、除外していても自動で表示します。</p>
           {(atkInferItem === "unknown" || atkInferItem === "known") && !isMega(attacker) && (
             <label className="ck" style={{ marginTop: 2 }}>
               <input type="checkbox" checked={exclBandGlasses} onChange={(e) => setExclBandGlasses(e.target.checked)} />
@@ -2626,7 +2718,7 @@ export default function ChampionsDamageCalc() {
             return (
             <div key={si} style={{ marginTop: 8 }}>
               <p className="stat-line"><b>【{s.label}】</b> 候補 {cands.length}通り（SPは0/32のみ）。クリックで攻撃側に反映。</p>
-              {downOnly && <p className="stat-line" style={{ color: "#e0b15a", fontSize: 11.5, margin: "2px 0 0" }}>※下降補正(▼0.9)でしか一致しないため、除外設定でも表示しています。</p>}
+              {downOnly && <p className="stat-line" style={{ color: "#e0b15a", fontSize: 12.5, margin: "2px 0 0" }}>※下降補正(▼0.9)でしか一致しないため、除外設定でも表示しています。</p>}
               {cands.length > 0 && (
                 <div className="infer-table">
                   <div className="infer-row infer-head" style={{ gridTemplateColumns: "1fr 1fr" }}>
@@ -2651,16 +2743,14 @@ export default function ChampionsDamageCalc() {
         </div>}
 
         {/* ===== 逆算: 与ダメ%から相手の育成を推定（モーダル表示） ===== */}
-        {showInference && <div className="modal-backdrop modal-top" onClick={() => setShowInference(false)}>
+        {showInference && <div className="modal-backdrop modal-top" {...dismissOnBackdrop(() => setShowInference(false))}>
         <section className="result modal" onClick={(e) => e.stopPropagation()}>
           <button className="modal-close" onClick={() => setShowInference(false)} aria-label="閉じる">✕</button>
           <p className="vs" style={{ marginBottom: 8 }}><b>耐久力推定</b>　相手（{defender.name}）のHPバーを減らした%から、HP SP・{defPhys ? "防御" : "特防"}SP・性格補正を逆算します。回復アイテムが発動した場合は選択すると自動補正</p>
           <div className="row" style={{ marginTop: 0 }}>
             <div className="field">
               <span className="field-label">減らしたHP%（整数）</span>
-              <input type="number" step="1" min="0" max="100" style={{ width: 90 }}
-                placeholder="例: 43" value={curHpPct}
-                onChange={(e) => setCurHpPct(e.target.value.replace(/[.,].*$/, ""))} />
+              <NumStepper value={curHpPct} onChange={setCurHpPct} min={0} max={100} placeholder="例: 43" />
             </div>
             <div className="field">
               <span className="field-label">回復アイテム</span>
@@ -2668,10 +2758,11 @@ export default function ChampionsDamageCalc() {
                 {["なし", "たべのこし", "オボンのみ"].map((x) => <option key={x}>{x}</option>)}
               </select>
             </div>
-            <label className="ck" style={{ paddingBottom: 8 }}>
+            <label className="ck" style={{ paddingBottom: 8, fontSize: 11.5 }}>
               <input type="checkbox" checked={excludeDownNat} onChange={(e) => setExcludeDownNat(e.target.checked)} />
               下降補正(▼0.9)を除外
             </label>
+            <p style={{ flexBasis: "100%", fontSize: 12, color: "#8a93a8", margin: "0 0 4px", lineHeight: 1.5 }}>※ 下降補正でしか一致しない場合は、除外していても自動で表示します。</p>
           </div>
           {curHpPct !== "" && healItem !== "なし" && <p className="stat-line">{healItem}の回復分を自動補正して逆算します（回復量は候補のHP実数値ごとに厳密計算）。</p>}
           {inference?.error && <p className="stat-line" style={{ color: "#e8504a" }}>{inference.error}</p>}
@@ -2683,7 +2774,7 @@ export default function ChampionsDamageCalc() {
             return (
               <>
                 <p className="stat-line">候補 {dispCands.length}通り（SPは0/32のみで探索 / 攻撃側は現在の設定を仮定）。クリックで防御側に反映。</p>
-                {downOnly && <p className="stat-line" style={{ color: "#e0b15a", fontSize: 11.5, margin: "2px 0 0" }}>※下降補正(▼0.9)でしか一致しないため、除外設定でも表示しています。</p>}
+                {downOnly && <p className="stat-line" style={{ color: "#e0b15a", fontSize: 12.5, margin: "2px 0 0" }}>※下降補正(▼0.9)でしか一致しないため、除外設定でも表示しています。</p>}
                 <div className="infer-table">
                   <div className="infer-row infer-head">
                     <span>{defPhys ? "防御" : "特防"}性格</span><span>HP SP</span><span>{defPhys ? "防御" : "特防"}SP</span>
@@ -2707,7 +2798,7 @@ export default function ChampionsDamageCalc() {
         </section>
         </div>}
 
-        {confirmOff && <div className="modal-backdrop" onClick={() => setConfirmOff(null)}>
+        {confirmOff && <div className="modal-backdrop" {...dismissOnBackdrop(() => setConfirmOff(null))}>
           <section className="confirm-modal" onClick={(e) => e.stopPropagation()}>
             <p className="confirm-title">特性「{confirmOff.ability}」をオフにしますか？</p>
             <p className="confirm-msg">この特性は条件を満たすと<b>自動で適用されています</b>。オフにすると、この特性の効果が計算に反映されなくなります。</p>
@@ -2718,7 +2809,7 @@ export default function ChampionsDamageCalc() {
           </section>
         </div>}
 
-        {warnModal && <div className="modal-backdrop" onClick={() => setWarnModal(null)}>
+        {warnModal && <div className="modal-backdrop" {...dismissOnBackdrop(() => setWarnModal(null))}>
           <section className="confirm-modal" onClick={(e) => e.stopPropagation()}>
             <p className="confirm-title">{warnModal.title}</p>
             <p className="confirm-msg">{warnModal.msg}</p>
