@@ -576,15 +576,15 @@ export function RecognitionPanel({ pokemonData, onConfirm, onPick, activeName, o
               <img src={`disp/pokemon_${String(dispIdx).padStart(3, "0")}.png`}
                 onClick={() => onPick && slot.selected && onPick(slot.selected)}
                 title="クリックで右側にセット"
-                width={38} height={38}
+                width={40} height={40}
                 style={{ cursor: onPick ? "pointer" : "default", borderRadius: 6, flexShrink: 0, outline: isActive ? "2px solid #5b5be0" : "2px solid transparent" }} alt="" />
-            ) : <span style={{ width: 38, height: 38, flexShrink: 0 }} />}
+            ) : <span style={{ width: 40, height: 40, flexShrink: 0 }} />}
             {/* メガシンカ可能種は X/Y 両方のメガアイコンも表示。クリックでメガ体として右側にセット。 */}
             {(MEGA_FORMS[slot.selected] || []).map((mn) => (
               <img key={mn} src={megaIconPath(mn)}
                 onClick={() => onPick && onPick(mn)}
                 title={`${mn} をセット`}
-                width={38} height={38}
+                width={40} height={40}
                 style={{ cursor: onPick ? "pointer" : "default", borderRadius: 6, flexShrink: 0, outline: mn === activeName ? "2px solid #5b5be0" : "2px solid transparent" }} alt="" />
             ))}
             {/* 認識した名前(テキスト表示)＋検出タイプ。セットは左のアイコンクリックで行う */}

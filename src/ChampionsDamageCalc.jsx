@@ -1555,7 +1555,7 @@ export default function ChampionsDamageCalc() {
       setAtkSp(aSnap.atkSp); setAtkNature(aSnap.atkNature);
       setAtkAbility(aSnap.atkAbility); setAtkAbilityOn(aSnap.atkAbilityOn); setMoveName(aSnap.moveName);
       setAtkRank(aSnap.atkRank ?? 0); setBoostCount(aSnap.boostCount ?? 0); // ランクもポケ別に復元（交代で相手側に引き継がない）
-    } else { const c = cfgFor(newAtkIdx); if (c) applyMemberToAttacker(c); setAtkRank(0); setBoostCount(0); }
+    } else { const c = cfgFor(newAtkIdx); if (c) applyMemberToAttacker(c); else { setAtkSp(32); setAtkNature(1.1); } setAtkRank(0); setBoostCount(0); } // 登録もスナップも無い攻撃側は既定(32/▲)へ。前の攻撃側のSP/性格を相手側に引き継がない
     // 攻撃側の戦況トグル(急所/やけど/てだすけ/連続回数)もポケ別に復元。スナップ無し＝既定に戻し、相手側へ引き継がない。
     setCrit(aSnap?.crit ?? false); setBurn(aSnap?.burn ?? false); setHelpingHand(aSnap?.helpingHand ?? false); setHits(aSnap?.hits ?? 0);
     // 4) 新しい防御側を復元
@@ -1565,7 +1565,7 @@ export default function ChampionsDamageCalc() {
       setHpSp(dSnap.hpSp); setBSp(dSnap.bSp); setDSp(dSnap.dSp); setBNature(dSnap.bNature);
       setDNature(dSnap.dNature); setDefAbility(dSnap.defAbility); setDefAbilityOn(dSnap.defAbilityOn);
       setDefRank(dSnap.defRank ?? 0); // 防御ランクもポケ別に復元
-    } else { const c = cfgFor(newDefIdx); if (c) applyMemberToDefender(c); setDefRank(0); }
+    } else { const c = cfgFor(newDefIdx); if (c) applyMemberToDefender(c); else { setHpSp(0); setBSp(0); setDSp(0); setBNature(1.0); setDNature(1.0); } setDefRank(0); } // 登録もスナップも無い防御側は既定(SP0/無補正)へ。引き継がない
     setWall(dSnap?.wall ?? false); // 壁(リフレクター/ひかりのかべ)もポケ別に復元＝交代で相手側に引き継がない
     // 5) 持ち物はポケモン固有なので役割交代でそのまま追従（スナップ/登録構成による持ち物上書きより後に最終決定）。メガはidx変更effectが「なし」に戻す。
     setAtkItem(carryAtkItem); setDefItem(carryDefItem);
@@ -1714,14 +1714,14 @@ export default function ChampionsDamageCalc() {
         .rail-icon:hover{border-color:#3d4f78;background:#161d2e}
         .team-rail.left .rail-icon.on{border-color:#ff7a6b;background:rgba(255,122,107,.14)}
         .team-rail.right .rail-icon.on{border-color:#5b9bf0;background:rgba(91,155,240,.14)}
-        .rail-icon img{width:38px;height:38px;display:block}
+        .rail-icon img{width:40px;height:40px;display:block}
         .rail-name{font-size:10.5px;color:#c4cede;text-align:center;line-height:1.15;word-break:break-all;max-height:28px;max-width:52px;overflow:hidden}
         .rail-noimg{width:40px;height:40px;display:flex;align-items:center;justify-content:center;color:#5a6478;font-size:14px}
         @media(max-width:1000px){
           .calc-layout{flex-direction:column}
           .team-rail{position:static;width:100%;flex:none;flex-direction:row;flex-wrap:wrap;justify-content:center;gap:8px}
           .team-rail .rail-title{width:100%;margin:0}
-          .rail-icon img{width:34px;height:34px}
+          .rail-icon img{width:40px;height:40px}
         }
         .wfx{position:fixed;inset:0;pointer-events:none;z-index:0;overflow:hidden}
         .panel-fx{position:absolute;inset:0;pointer-events:none;z-index:0;overflow:hidden;border-radius:13px}
@@ -2341,6 +2341,9 @@ export default function ChampionsDamageCalc() {
                   </select>
                 </label>
               )}
+            </div>
+
+            <div className="row">
               <div className="field">
                 <span className="field-label">もちもの{isMega(attacker) ? "（メガ＝不可）" : ""}</span>
                 <select className="rank" value={isMega(attacker) ? "なし" : atkItem} disabled={isMega(attacker)} onChange={(e) => setAtkItem(e.target.value)}>
@@ -2364,6 +2367,9 @@ export default function ChampionsDamageCalc() {
                   ⚔ 攻撃力推定
                 </button>
               )}
+            </div>
+
+            <div className="row">
               <SpInput label={`${atkStatLabel}SP`} value={atkSp} onChange={setAtkSp} />
               <div className="field">
                 <span className="field-label">性格補正</span>
