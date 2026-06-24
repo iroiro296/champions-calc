@@ -7,9 +7,12 @@ import { scanStatScreen, saveTextTemplate, loadKana, learnCells, matchAbilityCel
 import { STATUS_MOVES } from "./statusMoves.js";
 import { ILLEGAL_MOVES } from "./illegal-moves.js";
 import { ALL_ITEM_NAMES } from "./item-data.js";
+import { MOVE_USAGE } from "./usage-data.js";
 import { obsShot } from "./obsClient.js"; // OBS 1フレーム撮影（プレビュー/相手認識と共通。png=可逆でOCR用、jpgは軽いプレビュー用）
 
 const ILLEGAL_SET = new Set(ILLEGAL_MOVES); // チャンピオンズ非合法技（読めても🚫付きで表示）
+// 技の採用率マップ（ダメ計と同じ MOVE_USAGE。メガは「(メガ)」を外してベース種にフォールバック）
+const moveUsageFor = (name) => MOVE_USAGE[name] || MOVE_USAGE[name.replace(/\(メガ[XY]?\)$/, "")] || {};
 // ダメ計には出ない（固定ダメージ/一撃必殺/カウンター系で計算式に乗らない）が、ゲームでは使える実在技。
 // どのポケが覚えるかは excludedLearnset.js（Champions learnset由来）。この集合は ILLEGAL_SET に入っていても🚫表示しないための判定に使う。
 const CALC_EXCLUDED_SET = new Set(Object.values(EXCLUDED_LEARNSET).flat());
@@ -211,7 +214,12 @@ function MemberEditor({ pokemonData, moveData, statusMoves, itemOptions, hpStat,
     setSp((s) => ({ ...s, [k]: v }));
   };
   const realStat = (k) => (k === "h" ? hpStat(poke.base.h, sp.h) : stat(poke.base[k], sp[k], natureMul(k)));
-  const learnMoves = useMemo(() => { const st = statusMoves || {}; return (poke.learnset || []).filter((mv) => moveData[mv] || st[mv]).sort((a, b) => a.localeCompare(b, "ja")); }, [poke, moveData, statusMoves]);
+  const moveUsage = useMemo(() => moveUsageFor(poke.name), [poke]);
+  const learnMoves = useMemo(() => {
+    const st = statusMoves || {};
+    return (poke.learnset || []).filter((mv) => moveData[mv] || st[mv])
+      .sort((a, b) => { const ua = moveUsage[a] ?? -1, ub = moveUsage[b] ?? -1; return ua !== ub ? ub - ua : a.localeCompare(b, "ja"); }); // 採用率降順→データ無しは末尾・五十音
+  }, [poke, moveData, statusMoves, moveUsage]);
   const extraMoves = useMemo(() => EXCLUDED_LEARNSET[poke.name] || [], [poke]); // そのポケが覚える「ダメ計対象外」の実在技（カウンター/一撃必殺等）
   const setMove = (i, v) => setMoves((ms) => ms.map((x, j) => (j === i ? v : x)));
 
@@ -270,7 +278,7 @@ function MemberEditor({ pokemonData, moveData, statusMoves, itemOptions, hpStat,
                 <option value="">—</option>
                 {/* 現在の値がlearnset・対象外のどちらにも無い時だけ単独で先頭に出して保持（スキャンした非合法技など） */}
                 {moves[i] && !learnMoves.includes(moves[i]) && !extraMoves.includes(moves[i]) && <option value={moves[i]}>{moves[i]}</option>}
-                {learnMoves.map((mv) => <option key={mv} value={mv}>{mv}</option>)}
+                {learnMoves.map((mv) => <option key={mv} value={mv}>{moveUsage[mv] != null ? `${mv} ${moveUsage[mv].toFixed(1)}%` : mv}</option>)}
                 {extraMoves.length > 0 && (
                   <optgroup label="ダメ計対象外の技">
                     {extraMoves.map((mv) => <option key={mv} value={mv}>{mv}</option>)}

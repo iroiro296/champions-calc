@@ -33,3 +33,6 @@ public/_itemtmp
 _work
 test-fixtures
 *.bak
+
+# fetch-usage-data.mjs のPokeAPI日本語名キャッシュ（再生成可能・非コミット）
+scripts/.pokeapi-ja-cache.json

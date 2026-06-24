@@ -6,6 +6,7 @@
  */
 
 import { writeFileSync } from "fs";
+import { pathToFileURL } from "url";
 import { YAKKUN_ORDER } from "./yakkun-order.mjs";
 
 const BASE = "https://raw.githubusercontent.com/smogon/pokemon-showdown/master";
@@ -155,7 +156,8 @@ function nameToPokeapiId(name) {
 
 // フォルム違い・地域変種の日本語名ハードコードマッピング
 // PokeAPI の /pokemon-species/ はベース種のみを持つため、フォルム名は手動で設定
-const FORME_JA_NAMES = {
+// （fetch-usage-data.mjs からも import して採用率データのフォルム名解決に使う）
+export const FORME_JA_NAMES = {
   // 地域変種（表記はポケモン徹底攻略に準拠）
   raichualola:        "ライチュウ(アローラ)",
   ninetalesalola:     "キュウコン(アローラ)",
@@ -568,4 +570,8 @@ export const POKEMON_DATA = ${JSON.stringify(POKEMON, null, 2)};
   }
 }
 
-main().catch(console.error);
+// 直接 `node scripts/fetch-showdown-data.mjs` で実行した時のみ走らせる。
+// 他スクリプト(fetch-usage-data.mjs)から FORME_JA_NAMES を import しても生成は走らない。
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch(console.error);
+}

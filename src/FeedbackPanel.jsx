@@ -10,10 +10,10 @@ const CATEGORIES = ["不具合の報告", "機能の要望", "その他"];
 const GFORM_ID = "1FAIpQLSfr1zv0cJlQ2L5rM8s4DeOQMPlUIr0sEtDwVUBHERrywabHEQ";
 const GFORM_ENTRY = { cat: "entry.926364873", text: "entry.1237453704" }; // 種類 / 内容
 
-// 実装予定（ロードマップ）
+// 実装予定（ロードマップ）。done: true は実装済み（取り消し線＋実装完了表示）
 const PLANNED = [
-  "採用率の高い技を上に表示",
-  "ダブルバトルへの対応",
+  { text: "採用率の高い技を上に表示", done: true },
+  { text: "ダブルバトルへの対応" },
 ];
 
 export default function FeedbackPanel({ version = "dev" }) {
@@ -56,7 +56,12 @@ export default function FeedbackPanel({ version = "dev" }) {
       <div style={card}>
         <h2 style={h2}>🔧 実装予定</h2>
         <ul style={{ margin: 0, paddingLeft: 20, fontSize: 13, color: "#9aa6bd", lineHeight: 1.9 }}>
-          {PLANNED.map((k, i) => <li key={i}>{k}</li>)}
+          {PLANNED.map((k, i) => (
+            <li key={i}>
+              <span style={k.done ? { textDecoration: "line-through", opacity: 0.6 } : undefined}>{k.text}</span>
+              {k.done && <span style={{ marginLeft: 8, color: "#5fcf80", fontWeight: 700, fontSize: 12, whiteSpace: "nowrap" }}>✅ 実装完了</span>}
+            </li>
+          ))}
         </ul>
       </div>
 
