@@ -72,9 +72,26 @@ const DEF_ITEMS = ["なし", "抜群半減きのみ"];
 const ALL_ITEMS = ["なし", "タイプ強化(×1.2)", "いのちのたま", "ちからのハチマキ", "ものしりメガネ", "たつじんのおび", "メトロノーム", "でんきだま", "抜群半減きのみ"];
 const isMega = (p) => /[（(]メガ/.test(p?.name || ""); // メガシンカ(メガストーン保持)＝他の持ち物は持てない
 // メガ種の採用率はベース種と技プールが共通 → メガ専用データが無ければ「(メガ)」を外したベース種の採用率を使う
-const usageMapFor = (name) => MOVE_USAGE[name] || MOVE_USAGE[name.replace(/\(メガ[XY]?\)$/, "")] || {};
-// 特性の採用率マップ（メガは「(メガ)」を外してベース種にフォールバック）
-const abilityUsageMapFor = (name) => ABILITY_USAGE[name] || ABILITY_USAGE[name.replace(/\(メガ[XY]?\)$/, "")] || {};
+// フォルム違い（マイティ/ブレード/パンプジン各サイズ/パルデアケンタロス炎・水）も技プールが共通 → 既定フォルムの採用率を流用
+const FORM_USAGE_BASE = {
+  "イルカマン(マイティ)": "イルカマン(ナイーブ)",
+  "ギルガルド(ブレード)": "ギルガルド(シールド)",
+  "ケンタロス(パルデア炎)": "ケンタロス(パルデア単)",
+  "ケンタロス(パルデア水)": "ケンタロス(パルデア単)",
+  "パンプジン(小)": "パンプジン(普通)",
+  "パンプジン(大)": "パンプジン(普通)",
+  "パンプジン(特大)": "パンプジン(普通)",
+};
+const usageMapFor = (name) => MOVE_USAGE[name] || MOVE_USAGE[FORM_USAGE_BASE[name]] || MOVE_USAGE[name.replace(/\(メガ[XY]?\)$/, "")] || {};
+// 特性の採用率マップ（メガ・フォルム違いはベース/既定フォルムにフォールバック）
+const abilityUsageMapFor = (name) => ABILITY_USAGE[name] || ABILITY_USAGE[FORM_USAGE_BASE[name]] || ABILITY_USAGE[name.replace(/\(メガ[XY]?\)$/, "")] || {};
+// イルカマン/ギルガルド: メガと同様にワンボタンでフォルムチェンジ（双方向）
+const FORM_SIBLING = {
+  "イルカマン(ナイーブ)": "イルカマン(マイティ)",
+  "イルカマン(マイティ)": "イルカマン(ナイーブ)",
+  "ギルガルド(シールド)": "ギルガルド(ブレード)",
+  "ギルガルド(ブレード)": "ギルガルド(シールド)",
+};
 // 特性を採用率順に並べた [{x, u}] を返す（採用率データの無い特性は末尾・元の順）
 const abilityOptions = (poke) => {
   const u = abilityUsageMapFor(poke.name);
@@ -1691,7 +1708,7 @@ export default function ChampionsDamageCalc() {
     const name = POKEMON[idx].name;
     const isMega = name.includes("メガ");
     const base = name.replace(/\(.*\)$/, "");
-    return POKEMON
+    const opts = POKEMON
       .map((p, i) => ({ name: p.name, i }))
       .filter(({ name: n, i }) =>
         i !== idx && (isMega ? n === base : n.startsWith(base + "(") && n.includes("メガ"))
@@ -1700,6 +1717,13 @@ export default function ChampionsDamageCalc() {
         i,
         label: n.includes("メガ") ? n.match(/\((.*)\)/)[1] + "へ" : "元の姿に戻す",
       }));
+    // イルカマン/ギルガルド等のフォルムチェンジ（メガ以外。双方向）
+    const sib = FORM_SIBLING[name];
+    if (sib) {
+      const si = POKEMON.findIndex((p) => p.name === sib);
+      if (si >= 0) opts.push({ i: si, label: (sib.match(/\(([^)]+)\)$/) || [, sib])[1] + "へ" });
+    }
+    return opts;
   };
   const FormeButtons = ({ idx, onChange }) => {
     const opts = formeOptions(idx);
