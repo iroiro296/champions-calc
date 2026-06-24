@@ -13,7 +13,7 @@ const GFORM_ENTRY = { cat: "entry.926364873", text: "entry.1237453704" }; // 種
 // 実装予定（ロードマップ）。done: true は実装済み（取り消し線＋実装完了表示）
 const PLANNED = [
   { text: "採用率の高い技を上に表示", done: true },
-  { text: "ダブルバトルへの対応" },
+  { text: "ダブルバトルへの対応", done: true },
 ];
 
 export default function FeedbackPanel({ version = "dev" }) {

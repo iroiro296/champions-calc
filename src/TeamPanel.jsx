@@ -7,12 +7,15 @@ import { scanStatScreen, saveTextTemplate, loadKana, learnCells, matchAbilityCel
 import { STATUS_MOVES } from "./statusMoves.js";
 import { ILLEGAL_MOVES } from "./illegal-moves.js";
 import { ALL_ITEM_NAMES } from "./item-data.js";
-import { MOVE_USAGE } from "./usage-data.js";
+import { MOVE_USAGE, ABILITY_USAGE, MOVE_USAGE_DOUBLES, ABILITY_USAGE_DOUBLES } from "./usage-data.js";
+import { FORM_USAGE_BASE } from "./forme-usage-base.js";
 import { obsShot } from "./obsClient.js"; // OBS 1フレーム撮影（プレビュー/相手認識と共通。png=可逆でOCR用、jpgは軽いプレビュー用）
 
 const ILLEGAL_SET = new Set(ILLEGAL_MOVES); // チャンピオンズ非合法技（読めても🚫付きで表示）
-// 技の採用率マップ（ダメ計と同じ MOVE_USAGE。メガは「(メガ)」を外してベース種にフォールバック）
-const moveUsageFor = (name) => MOVE_USAGE[name] || MOVE_USAGE[name.replace(/\(メガ[XY]?\)$/, "")] || {};
+// 技の採用率マップ（src=シングル/ダブル切替可。メガ・フォルム違いはベース/既定フォルムにフォールバック）
+const moveUsageFor = (name, src = MOVE_USAGE) => src[name] || src[FORM_USAGE_BASE[name]] || src[name.replace(/\(メガ[XY]?\)$/, "")] || {};
+// 特性の採用率マップ（同上）
+const abilityUsageFor = (name, src = ABILITY_USAGE) => src[name] || src[FORM_USAGE_BASE[name]] || src[name.replace(/\(メガ[XY]?\)$/, "")] || {};
 // ダメ計には出ない（固定ダメージ/一撃必殺/カウンター系で計算式に乗らない）が、ゲームでは使える実在技。
 // どのポケが覚えるかは excludedLearnset.js（Champions learnset由来）。この集合は ILLEGAL_SET に入っていても🚫表示しないための判定に使う。
 const CALC_EXCLUDED_SET = new Set(Object.values(EXCLUDED_LEARNSET).flat());
@@ -27,23 +30,30 @@ const NATURE_STATS = ["a", "b", "c", "d", "s"]; // HPは性格補正の対象外
 const SP_MAX = 32, SP_TOTAL = 66, NUM_TEAMS = 18, TEAM_SIZE = 6, KEY = "championsMyTeams";
 
 const emptyTeams = () => Array.from({ length: NUM_TEAMS }, () => Array(TEAM_SIZE).fill(null));
+const padTeams = (arr) => {
+  const t = (Array.isArray(arr) ? arr : []).slice(0, NUM_TEAMS).map((x) => { const a = (x || []).slice(0, TEAM_SIZE); while (a.length < TEAM_SIZE) a.push(null); return a; });
+  while (t.length < NUM_TEAMS) t.push(Array(TEAM_SIZE).fill(null));
+  return t;
+};
+const padNames = (arr) => Array.from({ length: NUM_TEAMS }, (_, i) => (Array.isArray(arr) && typeof arr[i] === "string") ? arr[i] : "");
 function loadState() {
   try {
     const r = JSON.parse(localStorage.getItem(KEY));
     if (r && Array.isArray(r.teams)) {
-      // 旧データ(3チーム等)はNUM_TEAMSまで空チームでパディング、各チームもTEAM_SIZEに揃える
-      const teams = r.teams.slice(0, NUM_TEAMS).map((t) => { const a = (t || []).slice(0, TEAM_SIZE); while (a.length < TEAM_SIZE) a.push(null); return a; });
-      while (teams.length < NUM_TEAMS) teams.push(Array(TEAM_SIZE).fill(null));
-      const names = Array.from({ length: NUM_TEAMS }, (_, i) => (Array.isArray(r.names) && typeof r.names[i] === "string") ? r.names[i] : "");
-      return { teams, names, active: Math.min(Math.max(0, r.active || 0), NUM_TEAMS - 1) };
+      return {
+        teams: padTeams(r.teams), names: padNames(r.names), active: Math.min(Math.max(0, r.active || 0), NUM_TEAMS - 1),
+        teamsD: padTeams(r.teamsD), namesD: padNames(r.namesD), activeD: Math.min(Math.max(0, r.activeD || 0), NUM_TEAMS - 1),
+        boxS: Array.isArray(r.boxS) ? r.boxS : [],
+        boxD: Array.isArray(r.boxD) ? r.boxD : [],
+      };
     }
   } catch {}
-  return { teams: emptyTeams(), names: Array(NUM_TEAMS).fill(""), active: 0 };
+  return { teams: emptyTeams(), names: Array(NUM_TEAMS).fill(""), active: 0, teamsD: emptyTeams(), namesD: Array(NUM_TEAMS).fill(""), activeD: 0, boxS: [], boxD: [] };
 }
 export const iconOf = (name) => { const i = SPRITE_NAMES.indexOf(name); return i >= 0 ? `disp/pokemon_${String(i).padStart(3, "0")}.png` : megaIconPath(name); }; // メガ形態は通常スプライトに無いので disp-mega から引く
 
-const overlay = { position: "fixed", inset: 0, background: "#000a", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 };
-const modalBox = { background: "#23233a", border: "1px solid #44446a", borderRadius: 10, padding: 14, width: 360, maxWidth: "94vw", maxHeight: "90vh", overflowY: "auto", color: "#eee" };
+const overlay = { position: "fixed", inset: 0, background: "#000a", display: "flex", alignItems: "flex-start", justifyContent: "center", zIndex: 1000, overflowY: "auto", paddingTop: 24, paddingBottom: 24 };
+const modalBox = { background: "#23233a", border: "1px solid #44446a", borderRadius: 10, padding: 14, width: 360, maxWidth: "94vw", color: "#eee" };
 const sel = { flex: 1, padding: "3px 6px", background: "#1a1a2e", color: "#eee", border: "1px solid #44446a", borderRadius: 6, fontSize: 13 };
 const selSm = { ...sel, flex: "none", fontSize: 12, padding: "2px 4px" };
 const numInp = { background: "#23233a", color: "#eee", border: "1px solid #3a3a5a", borderRadius: 4, fontSize: 12, padding: "1px 3px", boxSizing: "border-box" };
@@ -106,9 +116,9 @@ function MemberCell({ member, active, accent, onPick, onEdit, onClear, onScan, o
   if (!member) return (
     <div style={{ display: "flex", alignItems: "stretch", borderRadius: 8, border: "1px dashed #44446a", background: "#23233a", overflow: "hidden", minHeight: 52 }}>
       <button onClick={onScan} disabled={busy} title="OBSから取り込んでこの枠に登録（ワンボタン）"
-        style={{ flex: 1, border: 0, background: "transparent", color: "#bfe6c8", cursor: "pointer", fontSize: 14, fontWeight: 600, padding: "9px 0", textAlign: "left", paddingLeft: 12 }}>📸 取込{busy ? "…" : ""}</button>
+        style={{ flex: 1, border: 0, background: "transparent", color: "#bfe6c8", cursor: "pointer", fontSize: 13, fontWeight: 600, padding: "9px 0", textAlign: "center" }}>📸 取込{busy ? "…" : ""}</button>
       <button onClick={onEdit} title="手動で追加"
-        style={{ borderLeft: "1px dashed #44446a", background: "transparent", color: "#778", cursor: "pointer", fontSize: 12, padding: "0 12px" }}>✎ 手動</button>
+        style={{ flex: 1, borderLeft: "1px dashed #44446a", background: "transparent", color: "#9aabbd", cursor: "pointer", fontSize: 13, fontWeight: 600, padding: "9px 0", textAlign: "center" }}>✎ 手動</button>
     </div>
   );
   const icon = iconOf(member.name);
@@ -177,14 +187,22 @@ function MemberCell({ member, active, accent, onPick, onEdit, onClear, onScan, o
   );
 }
 
-function MemberEditor({ pokemonData, moveData, statusMoves, itemOptions, hpStat, stat, accent, initial, onCancel, onSave }) {
+function MemberEditor({ pokemonData, moveData, statusMoves, itemOptions, hpStat, stat, accent, initial, battleFormat, box = [], onCancel, onSave }) {
   const names = useMemo(() => pokemonData.map((p) => p.name).sort((a, b) => a.localeCompare(b, "ja")), [pokemonData]);
   const [name, setName] = useState(initial?.name || names[0]);
   const [nature, setNature] = useState(initial?.nature || { plus: null, minus: null });
   const [sp, setSp] = useState(initial?.sp || { h: 0, a: 0, b: 0, c: 0, d: 0, s: 0 });
-  const [item, setItem] = useState(initial?.item || "なし");
+  const [item, setItem] = useState(initial?.item || "その他");
   const poke = useMemo(() => pokemonData.find((p) => p.name === name) || pokemonData[0], [name, pokemonData]);
-  const [ability, setAbility] = useState(initial?.ability || poke.abilities?.[0] || "なし");
+  const moveSrc    = battleFormat === "doubles" ? MOVE_USAGE_DOUBLES : MOVE_USAGE;
+  const abilitySrc = battleFormat === "doubles" ? ABILITY_USAGE_DOUBLES : ABILITY_USAGE;
+  const bestAbilityFor = (p) => {
+    const abils = p.abilities || [];
+    if (!abils.length) return "なし";
+    const u = abilityUsageFor(p.name, abilitySrc);
+    return abils.slice().sort((a, b) => (u[b] ?? -1) - (u[a] ?? -1))[0] || "なし";
+  };
+  const [ability, setAbility] = useState(initial?.ability || bestAbilityFor(poke));
   const [moves, setMoves] = useState(() => {
     // 検出失敗したスロットは空けておく（上から詰めない）: initial.moves=一致技をスロット順に詰めたもの＋undetMoveIdx=失敗スロット番号 → 元の並びを復元し、失敗枠は "" に
     const matched = (initial?.moves || []).filter(Boolean);
@@ -197,11 +215,13 @@ function MemberEditor({ pokemonData, moveData, statusMoves, itemOptions, hpStat,
 
   // ポケモンを「ユーザーが実際に変更した時」だけ無効な特性・技を整理。初回マウント(スキャン直後)では消さない
   // ＝スキャンした技/特性は正しいポケモンを選ぶまで保持し選択肢にも出す。prevName比較なのでStrictModeの二重実行でも誤発火しない。
+  const [boxOpen, setBoxOpen] = useState(false);
+
   const prevName = useRef(name);
   useEffect(() => {
     if (prevName.current === name) return;
     prevName.current = name;
-    if (!poke.abilities?.includes(ability)) setAbility(poke.abilities?.[0] || "なし");
+    if (!poke.abilities?.includes(ability)) setAbility(bestAbilityFor(poke));
     setMoves((ms) => ms.map((mv) => (poke.learnset?.includes(mv) ? mv : "")));
   }, [name]); // eslint-disable-line
 
@@ -214,7 +234,14 @@ function MemberEditor({ pokemonData, moveData, statusMoves, itemOptions, hpStat,
     setSp((s) => ({ ...s, [k]: v }));
   };
   const realStat = (k) => (k === "h" ? hpStat(poke.base.h, sp.h) : stat(poke.base[k], sp[k], natureMul(k)));
-  const moveUsage = useMemo(() => moveUsageFor(poke.name), [poke]);
+  const moveUsage = useMemo(() => moveUsageFor(poke.name, moveSrc), [poke, moveSrc]);
+  const abilityList = useMemo(() => {
+    const u = abilityUsageFor(poke.name, abilitySrc);
+    const base = poke.abilities?.length ? poke.abilities : ["なし"];
+    const all = ability && !base.includes(ability) ? [ability, ...base] : base;
+    return all.map((x) => ({ x, u: all.length === 1 ? 100 : u[x] }))
+      .sort((a, b) => (b.u ?? -1) - (a.u ?? -1));
+  }, [poke, ability, abilitySrc]);
   const learnMoves = useMemo(() => {
     const st = statusMoves || {};
     return (poke.learnset || []).filter((mv) => moveData[mv] || st[mv])
@@ -222,6 +249,7 @@ function MemberEditor({ pokemonData, moveData, statusMoves, itemOptions, hpStat,
   }, [poke, moveData, statusMoves, moveUsage]);
   const extraMoves = useMemo(() => EXCLUDED_LEARNSET[poke.name] || [], [poke]); // そのポケが覚える「ダメ計対象外」の実在技（カウンター/一撃必殺等）
   const setMove = (i, v) => setMoves((ms) => ms.map((x, j) => (j === i ? v : x)));
+  const boxForPoke = useMemo(() => box.filter((e) => e.name === name), [box, name]);
 
   return createPortal(
     <div style={overlay} onClick={onCancel}>
@@ -232,6 +260,37 @@ function MemberEditor({ pokemonData, moveData, statusMoves, itemOptions, hpStat,
             {names.map((n) => <option key={n} value={n}>{n}</option>)}
           </select>
         </Row>
+        {boxForPoke.length > 0 && (
+          <div style={{ margin: "3px 0 6px", background: "#0e1b2a", borderRadius: 6, border: "1px solid #1c3048" }}>
+            <button onClick={() => setBoxOpen((v) => !v)} style={{ display:"flex", alignItems:"center", gap:6, width:"100%", padding:"6px 8px", background:"none", border:"none", cursor:"pointer", textAlign:"left" }}>
+              <span style={{ fontSize:11.5, fontWeight:700, color:"#9fd0ff" }}>📦 ボックスから選ぶ（{boxForPoke.length}件）</span>
+              <span style={{ marginLeft:"auto", fontSize:11, color:"#6a8aae" }}>{boxOpen ? "▲" : "▼"}</span>
+            </button>
+            {boxOpen && (
+              <div style={{ padding:"0 8px 6px", display:"flex", flexDirection:"column", gap:3 }}>
+                {boxForPoke.map((entry) => (
+                  <button key={entry.boxId} onClick={() => {
+                    setNature(entry.nature || { plus: null, minus: null });
+                    setSp({ h:0,a:0,b:0,c:0,d:0,s:0, ...(entry.sp || {}) });
+                    setItem(entry.item || "その他");
+                    setAbility(entry.ability || bestAbilityFor(poke));
+                    const ms = [...(entry.moves || []).filter(Boolean)]; while (ms.length < 4) ms.push(""); setMoves(ms.slice(0, 4));
+                  }} style={{ display:"flex", flexWrap:"wrap", gap:5, alignItems:"center", background:"#1a2a3a", border:"1px solid #2c4054", borderRadius:5, padding:"4px 8px", cursor:"pointer", textAlign:"left", width:"100%" }}>
+                    <span style={{ fontSize:12, color:"#9fd0ff", fontWeight:600 }}>{entry.ability || "—"}</span>
+                    {entry.item && entry.item !== "その他" && <span style={{ fontSize:11.5, color:"#9ab4c8" }}>{entry.item}</span>}
+                    {entry.nature?.plus  && <span style={{ fontSize:11, color:"#f9a" }}>▲{STAT_SHORT[entry.nature.plus]}</span>}
+                    {entry.nature?.minus && <span style={{ fontSize:11, color:"#9af" }}>▼{STAT_SHORT[entry.nature.minus]}</span>}
+                    {(entry.moves||[]).filter(Boolean).length > 0 && (
+                      <span style={{ fontSize:11, color:"#7a90ae" }}>
+                        {(entry.moves||[]).filter(Boolean).slice(0,2).join(" / ")}{(entry.moves||[]).filter(Boolean).length > 2 ? " …" : ""}
+                      </span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
         <Row label="せいかく">
           <span style={{ fontSize: 11, color: "#f9a" }}>▲</span>
           <select value={nature.plus || ""} onChange={(e) => setNature((n) => ({ ...n, plus: e.target.value || null }))} style={selSm}>
@@ -248,15 +307,37 @@ function MemberEditor({ pokemonData, moveData, statusMoves, itemOptions, hpStat,
             <span style={{ color: total > SP_TOTAL ? "#f88" : "#9af" }}>合計 {total}/{SP_TOTAL}</span>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 4 }}>
-            {STAT_KEYS.map((k) => (
-              <div key={k} style={{ background: "#1a1a2e", borderRadius: 5, padding: "3px 5px" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11 }}>
-                  <span style={{ color: nature.plus === k ? "#f9a" : nature.minus === k ? "#9af" : "#aab" }}>{STAT_LABEL[k]}</span>
-                  <span style={{ opacity: 0.65 }}>{realStat(k)}</span>
+            {STAT_KEYS.map((k) => {
+              const v = sp[k] || 0;
+              const qBtn = (val) => ({
+                flex: 1, fontSize: 12, padding: "4px 0", cursor: "pointer", border: "none", borderRadius: 4,
+                background: v === val ? "#2c4a6b" : "#13192a", color: v === val ? "#9fd0ff" : "#7a90ae",
+                fontVariantNumeric: "tabular-nums", fontWeight: v === val ? 700 : 400,
+              });
+              const stepBtn = (disabled) => ({
+                flex: "0 0 28px", height: 28, fontSize: 17, lineHeight: 1, cursor: disabled ? "default" : "pointer",
+                border: "1px solid #2c3854", borderRadius: 5, background: "#13192a",
+                color: disabled ? "#333" : "#9fb0c8", padding: 0,
+              });
+              return (
+                <div key={k} style={{ background: "#1a1a2e", borderRadius: 5, padding: "4px 6px" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 3 }}>
+                    <span style={{ color: nature.plus === k ? "#f9a" : nature.minus === k ? "#9af" : "#bbc" }}>{STAT_LABEL[k]}</span>
+                    <span style={{ opacity: 0.75 }}>{realStat(k)}</span>
+                  </div>
+                  <div style={{ display: "flex", gap: 2, marginBottom: 3 }}>
+                    {[0, 16, 32].map((val) => (
+                      <button key={val} onClick={() => setSpStat(k, val)} style={qBtn(val)}>{val}</button>
+                    ))}
+                  </div>
+                  <div style={{ display: "flex", gap: 2, alignItems: "center" }}>
+                    <button onClick={() => setSpStat(k, v - 1)} style={stepBtn(v === 0)}>−</button>
+                    <span style={{ flex: 1, textAlign: "center", fontSize: 13, fontVariantNumeric: "tabular-nums" }}>{v}</span>
+                    <button onClick={() => setSpStat(k, v + 1)} style={stepBtn(v >= SP_MAX)}>+</button>
+                  </div>
                 </div>
-                <input type="number" min={0} max={SP_MAX} value={sp[k]} onChange={(e) => setSpStat(k, Number(e.target.value))} style={{ width: "100%", ...numInp }} />
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
         <Row label="もちもの">
@@ -268,13 +349,13 @@ function MemberEditor({ pokemonData, moveData, statusMoves, itemOptions, hpStat,
         </Row>
         <Row label="とくせい">
           <select value={ability} onChange={(e) => setAbility(e.target.value)} style={sel}>
-            {(() => { const base = poke.abilities?.length ? poke.abilities : ["なし"]; return (ability && !base.includes(ability) ? [ability, ...base] : base).map((x) => <option key={x}>{x}</option>); })()}
+            {abilityList.map(({ x, u }) => <option key={x} value={x}>{u != null ? `${x} ${u.toFixed(1)}%` : x}</option>)}
           </select>
         </Row>
         <Row label="わざ(最大4)">
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4, flex: 1 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4, flex: 1, minWidth: 0 }}>
             {[0, 1, 2, 3].map((i) => (
-              <select key={i} value={moves[i] || ""} onChange={(e) => setMove(i, e.target.value)} style={selSm}>
+              <select key={i} value={moves[i] || ""} onChange={(e) => setMove(i, e.target.value)} style={{ ...selSm, width: "100%", minWidth: 0 }}>
                 <option value="">—</option>
                 {/* 現在の値がlearnset・対象外のどちらにも無い時だけ単独で先頭に出して保持（スキャンした非合法技など） */}
                 {moves[i] && !learnMoves.includes(moves[i]) && !extraMoves.includes(moves[i]) && <option value={moves[i]}>{moves[i]}</option>}
@@ -356,61 +437,80 @@ function spFromStats(base, stats, nature, barSp, hpStat, stat, numSp) {
   return out;
 }
 
+// 全く同じ型かどうかを判定（ボックス重複チェック用）
+const isSameBuild = (a, b) => {
+  if (a.name !== b.name) return false;
+  if ((a.nature?.plus ?? null) !== (b.nature?.plus ?? null)) return false;
+  if ((a.nature?.minus ?? null) !== (b.nature?.minus ?? null)) return false;
+  for (const k of STAT_KEYS) { if ((a.sp?.[k] || 0) !== (b.sp?.[k] || 0)) return false; }
+  if ((a.item || "その他") !== (b.item || "その他")) return false;
+  if ((a.ability || "") !== (b.ability || "")) return false;
+  const am = (a.moves || []).filter(Boolean).slice().sort();
+  const bm = (b.moves || []).filter(Boolean).slice().sort();
+  return am.length === bm.length && am.every((v, i) => v === bm[i]);
+};
+
 // チーム状態を「計算タブのバー」と「マイチームタブの管理画面」の両方で共有するためのフック。
 // 親(ChampionsDamageCalc)で1つだけ持ち、両方へ props で配る → タブを切り替えてもズレない。
 export function useMyTeams() {
   const [st, setSt] = useState(loadState);
   const [side, setSide] = useState("atk"); // 反映先（atk=こうげき / def=ぼうぎょ）
   useEffect(() => { try { localStorage.setItem(KEY, JSON.stringify(st)); } catch {} }, [st]);
-  const setActive = (i) => setSt((s) => ({ ...s, active: i }));
-  const setMember = (team, slot, member) => setSt((s) => { const t = s.teams.map((x) => x.slice()); t[team][slot] = member; return { ...s, teams: t }; });
-  const setName = (i, name) => setSt((s) => { const names = (s.names || []).slice(); while (names.length < NUM_TEAMS) names.push(""); names[i] = name; return { ...s, names }; });
-  const setTeam = (i, arr) => setSt((s) => { const t = s.teams.map((x) => x.slice()); const a = (arr || []).slice(0, TEAM_SIZE); while (a.length < TEAM_SIZE) a.push(null); t[i] = a; return { ...s, teams: t }; });
-  return { teams: st.teams, names: st.names || Array(NUM_TEAMS).fill(""), active: st.active, setActive, setMember, setName, setTeam, side, setSide };
+  // シングル
+  const setActive  = (i) => setSt((s) => ({ ...s, active: i }));
+  const setMember  = (team, slot, m) => setSt((s) => { const t = s.teams.map((x) => x.slice()); t[team][slot] = m; return { ...s, teams: t }; });
+  const setName    = (i, n) => setSt((s) => { const a = padNames(s.names).slice(); a[i] = n; return { ...s, names: a }; });
+  const setTeam    = (i, arr) => setSt((s) => { const t = s.teams.map((x) => x.slice()); t[i] = padTeams([arr])[0]; return { ...s, teams: t }; });
+  // ダブル
+  const setActiveD = (i) => setSt((s) => ({ ...s, activeD: i }));
+  const setMemberD = (team, slot, m) => setSt((s) => { const t = (s.teamsD || emptyTeams()).map((x) => x.slice()); t[team][slot] = m; return { ...s, teamsD: t }; });
+  const setNameD   = (i, n) => setSt((s) => { const a = padNames(s.namesD).slice(); a[i] = n; return { ...s, namesD: a }; });
+  const setTeamD   = (i, arr) => setSt((s) => { const t = (s.teamsD || emptyTeams()).map((x) => x.slice()); t[i] = padTeams([arr])[0]; return { ...s, teamsD: t }; });
+  const _mkBoxId = () => `${Date.now()}${Math.random().toString(36).slice(2, 5)}`;
+  const addToBoxS = (m) => setSt((s) => (s.boxS || []).some((e) => isSameBuild(e, m)) ? s : { ...s, boxS: [...(s.boxS || []), { ...m, boxId: _mkBoxId() }] });
+  const addToBoxD = (m) => setSt((s) => (s.boxD || []).some((e) => isSameBuild(e, m)) ? s : { ...s, boxD: [...(s.boxD || []), { ...m, boxId: _mkBoxId() }] });
+  const removeFromBoxS = (id) => setSt((s) => ({ ...s, boxS: (s.boxS || []).filter((e) => e.boxId !== id) }));
+  const removeFromBoxD = (id) => setSt((s) => ({ ...s, boxD: (s.boxD || []).filter((e) => e.boxId !== id) }));
+  // 編集結果が「自分以外の既存の型」と一致したら、編集中のエントリを削除して既存側に統合（重複を作らない＝addToBoxのスキップと対称）
+  const updateBoxS = (id, m) => setSt((s) => {
+    const arr = s.boxS || [];
+    if (arr.some((e) => e.boxId !== id && isSameBuild(e, m))) return { ...s, boxS: arr.filter((e) => e.boxId !== id) };
+    return { ...s, boxS: arr.map((e) => e.boxId === id ? { ...m, boxId: id } : e) };
+  });
+  const updateBoxD = (id, m) => setSt((s) => {
+    const arr = s.boxD || [];
+    if (arr.some((e) => e.boxId !== id && isSameBuild(e, m))) return { ...s, boxD: arr.filter((e) => e.boxId !== id) };
+    return { ...s, boxD: arr.map((e) => e.boxId === id ? { ...m, boxId: id } : e) };
+  });
+  return {
+    teams: st.teams, names: padNames(st.names), active: st.active, setActive, setMember, setName, setTeam,
+    teamsD: st.teamsD || emptyTeams(), namesD: padNames(st.namesD), activeD: st.activeD ?? 0, setActiveD, setMemberD, setNameD, setTeamD,
+    side, setSide,
+    boxS: st.boxS || [], boxD: st.boxD || [],
+    addToBoxS, addToBoxD, removeFromBoxS, removeFromBoxD, updateBoxS, updateBoxD,
+  };
 }
 
-// 計算タブ用の細いチームバー：登録済みメンバーをワンクリックで攻撃/防御へセット。登録・編集はマイチームタブで。
-export function TeamBar({ teams, active, setActive, side, setSide, onApply, atkName, defName, onManage }) {
-  const members = teams[active];
-  const filled = members.filter(Boolean).length;
-  const curName = side === "atk" ? atkName : defName;
-  return (
-    <div className="team-bar">
-      <div className="team-bar-top">
-        <span className="team-bar-label">🧩 マイチーム</span>
-        <div className="seg team-bar-teams">
-          {teams.map((t, i) => (
-            <button key={i} className={active === i ? "seg-btn on" : "seg-btn"} onClick={() => setActive(i)} title={`チーム${i + 1}（${t.filter(Boolean).length}/6）`}>
-              {i + 1}<span className="tb-mini">{t.filter(Boolean).length}</span>
-            </button>
-          ))}
-        </div>
-        <div className="seg team-bar-side">
-          {[["atk", "こうげきへ"], ["def", "ぼうぎょへ"]].map(([v, lbl]) => (
-            <button key={v} className={side === v ? "seg-btn on" : "seg-btn"} onClick={() => setSide(v)}>{lbl}</button>
-          ))}
-        </div>
-        <button className="team-bar-manage" onClick={onManage} title="マイチームを登録・編集">登録・編集 →</button>
-      </div>
-      {filled === 0 ? (
-        <div className="team-bar-empty"><button className="link-btn" onClick={onManage}>🧩 マイチームで登録</button>すると、ここからワンクリックで呼び出せます</div>
-      ) : (
-        <div className="team-bar-chips">
-          {members.map((m, i) => m ? (
-            <button key={i} className={m.name === curName ? "team-chip on" : "team-chip"} onClick={() => onApply(m, side)}
-              title={`${m.name} を${side === "atk" ? "こうげき" : "ぼうぎょ"}側にセット`}>{m.name}</button>
-          ) : null)}
-        </div>
-      )}
-    </div>
-  );
-}
-
-export function TeamPanel({ pokemonData, moveData, itemOptions, hpStat, stat, onApply, atkName, defName, accent = "#5b5be0", teams, names, active, setActive, setMember, setName, setTeam, side, setSide, obs, previewRef, previewOn, setPreviewOn, previewMsg }) {
+export function TeamPanel({ pokemonData, moveData, itemOptions, hpStat, stat, onApply, atkName, defName, accent = "#5b5be0",
+  teams: teamsS, names: namesS, active: activeS, setActive: setActiveS, setMember: setMemberS, setName: setNameS, setTeam: setTeamS,
+  teamsD, namesD, activeD, setActiveD, setMemberD, setNameD, setTeamD,
+  side, setSide, obs, previewRef, previewOn, setPreviewOn, previewMsg,
+  boxS = [], boxD = [], addToBoxS, addToBoxD,
+  isDouble = false }) {
   const [editing, setEditing] = useState(null); // { team, slot }
   const [renaming, setRenaming] = useState(false); // チーム名編集中
   const [nameInput, setNameInput] = useState("");
   const [confirmReset, setConfirmReset] = useState(false); // 全リセット確認モーダル
+  const isDoublePanel = isDouble;
+  const teams    = isDoublePanel ? teamsD    : teamsS;
+  const names    = isDoublePanel ? namesD    : namesS;
+  const active   = isDoublePanel ? activeD   : activeS;
+  const setActive  = isDoublePanel ? setActiveD  : setActiveS;
+  const setMember  = isDoublePanel ? setMemberD  : setMemberS;
+  const setName    = isDoublePanel ? setNameD    : setNameS;
+  const setTeam    = isDoublePanel ? setTeamD    : setTeamS;
+  const box      = isDoublePanel ? boxD : boxS;
+  const addToBox = isDoublePanel ? addToBoxD : addToBoxS;
   const filled = teams[active].filter(Boolean).length;
   const teamName = (names && names[active]) || `チーム${active + 1}`;
   const moveMember = (slot, dir) => { const j = slot + dir; if (j < 0 || j >= TEAM_SIZE) return; const arr = teams[active].slice(); [arr[slot], arr[j]] = [arr[j], arr[slot]]; setTeam(active, arr); };
@@ -463,7 +563,7 @@ export function TeamPanel({ pokemonData, moveData, itemOptions, hpStat, stat, on
       name,
       nature: r.nature || { plus: null, minus: null },
       sp,
-      item: "なし",
+      item: "その他", // ステ画面スキャンは持ち物を読めない＝不明扱い（「なし」だとポルターガイスト等の専用判定に誤干渉する）
       ability,
       moves: readMoves.slice(0, 4),
       undetMoves, // 未検出の技数（✎編集で保存すると消える）
@@ -536,7 +636,7 @@ export function TeamPanel({ pokemonData, moveData, itemOptions, hpStat, stat, on
       let ability = a.ability;
       if (matched && ability && !(matched.abilities || []).includes(ability)) ability = matched.abilities?.[0] || ability;
       if (!ability) ability = matched?.abilities?.[0] || "";
-      const item = a.item || "なし"; // OCRで読んだ実名のまま登録（メガ石も「○○ナイト」で個別識別）
+      const item = a.item || "その他"; // OCRで読んだ実名のまま登録（メガ石も「○○ナイト」で個別識別）。読めなければ不明＝その他
       setMember(active, slot, { name, nature: s.nature || { plus: null, minus: null }, sp, item, ability, moves: (a.moves || []).slice(0, 4), undetMoves: a.undetMoves || 0, undetMoveIdx: a.undetMoveIdx || [], abRead: !!ab, stRead: !!st }); // どのタブを取り込んだか＝未取込側のフィールドは表示で「未登録」に
       count++;
     }
@@ -604,7 +704,7 @@ export function TeamPanel({ pokemonData, moveData, itemOptions, hpStat, stat, on
   return (
     <div className="team-manager">
       <div className="team-manager-head">
-        <h2>🧩 マイチーム登録</h2>
+        <h2>🧩 マイチーム登録{isDoublePanel ? "（ダブル）" : "（シングル）"}</h2>
         <span className="team-manager-hint">OBS・スクショから自動登録。登録済みは計算タブからワンクリックで呼び出せます（{filled}/6）</span>
       </div>
       <div className="team-manager-body">
@@ -709,10 +809,13 @@ export function TeamPanel({ pokemonData, moveData, itemOptions, hpStat, stat, on
       </div>
       {editing && (
         <MemberEditor pokemonData={pokemonData} moveData={moveData} statusMoves={STATUS_MOVES} itemOptions={itemOptions} hpStat={hpStat} stat={stat} accent={accent}
+          battleFormat={isDoublePanel ? "doubles" : "singles"}
+          box={box}
           initial={editing.initial || teams[editing.team][editing.slot]}
           onCancel={() => { scanCropsRef.current = null; setEditing(null); }}
           onSave={(m) => {
             setMember(editing.team, editing.slot, m);
+            addToBox?.(m);
             const crops = scanCropsRef.current || []; // スキャンで未一致だった名前/特性を学習（次回から自動・localStorageに蓄積）
             for (const u of crops) {
               if (u.kind === "name" && m.name) saveTextTemplate("name", m.name, u.bytes);       // ポケモン名はまるごと照合
@@ -733,6 +836,153 @@ export function TeamPanel({ pokemonData, moveData, itemOptions, hpStat, stat, on
             </div>
           </div>
         </div>, document.body
+      )}
+    </div>
+  );
+}
+
+export function BoxPanel({ boxS = [], boxD = [], addToBoxS, addToBoxD, removeFromBoxS, removeFromBoxD, updateBoxS, updateBoxD, pokemonData = [], moveData = [], itemOptions = [], hpStat, stat, isDouble = false }) {
+  const [selected, setSelected] = useState(null);
+  const [editingId, setEditingId] = useState(null);
+  const [addingFor, setAddingFor] = useState(null); // null | { name: string|null }
+
+  const box = isDouble ? boxD : boxS;
+  const removeFromBox = isDouble ? removeFromBoxD : removeFromBoxS;
+  const updateBox = isDouble ? updateBoxD : updateBoxS;
+  const addToBox = isDouble ? addToBoxD : addToBoxS;
+
+  const grouped = useMemo(() => {
+    const map = {};
+    for (const e of box) {
+      if (!map[e.name]) map[e.name] = [];
+      map[e.name].push(e);
+    }
+    return map;
+  }, [box]);
+
+  const species = Object.keys(grouped);
+
+  useEffect(() => { if (selected && !grouped[selected]) setSelected(null); }, [grouped, selected]);
+
+  const natStr = (nat) => {
+    if (!nat) return "";
+    const parts = [];
+    if (nat.plus) parts.push(`▲${STAT_SHORT[nat.plus]}`);
+    if (nat.minus) parts.push(`▼${STAT_SHORT[nat.minus]}`);
+    return parts.join(" ");
+  };
+  const spTotal = (sp) => sp ? Object.values(sp).reduce((a, b) => a + b, 0) : 0;
+
+  const editingEntry = editingId ? box.find((e) => e.boxId === editingId) : null;
+  const isEditorOpen = editingId !== null || addingFor !== null;
+
+  const closeEditor = () => { setEditingId(null); setAddingFor(null); };
+
+  return (
+    <div className="team-manager">
+      <div className="team-manager-head">
+        <div style={{ display:"flex", alignItems:"center", gap:12, flexWrap:"wrap", marginBottom:6 }}>
+          <h2 style={{ margin:0 }}>📦 ボックス{isDouble ? "（ダブル）" : "（シングル）"}</h2>
+          <span style={{ fontSize:12, fontVariantNumeric:"tabular-nums", color:"#7c879c" }}>{species.length}種 / {box.length}件</span>
+          {pokemonData.length > 0 && (
+            <button onClick={() => { closeEditor(); setAddingFor({ name: null }); }}
+              style={{ marginLeft:"auto", fontSize:12, padding:"4px 12px", borderRadius:5, border:"1px solid #3a7cc0", background:"#1a3254", color:"#9fd0ff", cursor:"pointer" }}>
+              ＋ ポケモンを追加
+            </button>
+          )}
+        </div>
+        <span className="team-manager-hint">マイチームの「手動登録」で「保存」するたびに自動登録。アイコンをクリックすると登録済みの型を確認できます。</span>
+      </div>
+
+      {isEditorOpen && pokemonData.length > 0 && (
+        <MemberEditor
+          pokemonData={pokemonData} moveData={moveData} statusMoves={STATUS_MOVES} itemOptions={itemOptions}
+          hpStat={hpStat} stat={stat} accent="var(--brand)"
+          battleFormat={isDouble ? "doubles" : "singles"}
+          box={box}
+          initial={editingEntry || (addingFor?.name ? { name: addingFor.name } : undefined)}
+          onCancel={closeEditor}
+          onSave={(m) => {
+            if (editingId) updateBox?.(editingId, m);
+            else addToBox?.(m);
+            setSelected(m.name); // 追加/編集したポケモンの型一覧を開いて結果を見せる
+            closeEditor();
+          }}
+        />
+      )}
+
+      {box.length === 0 && !isEditorOpen ? (
+        <div style={{ padding:"32px 0", color:"#7a90ae", fontSize:13, textAlign:"center" }}>
+          まだ登録がありません。マイチームタブで「保存」するとここに自動登録されます。
+        </div>
+      ) : (
+        <div className="team-manager-body">
+          <div style={{ display:"flex", flexWrap:"wrap", gap:6, marginBottom:10 }}>
+            {species.map((name) => {
+              const entries = grouped[name];
+              const isSelected = selected === name;
+              const icon = iconOf(name);
+              return (
+                <button key={name} onClick={() => setSelected(isSelected ? null : name)}
+                  style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:3, padding:"6px 8px", borderRadius:8, cursor:"pointer", background: isSelected ? "#1e3a5c" : "#1a1a2e", border:"1px solid "+(isSelected ? "#5a9fd0" : "#2c3854"), color: isSelected ? "#9fd0ff" : "#9aa6bd", minWidth:76 }}>
+                  <img src={icon} width={48} height={48} alt={name} style={{ borderRadius:4, display:"block" }} />
+                  <span style={{ fontSize:11.5, fontWeight: isSelected ? 700 : 400, whiteSpace:"nowrap", maxWidth:80, overflow:"hidden", textOverflow:"ellipsis" }}>{name}</span>
+                  <span style={{ fontSize:11, opacity:0.7, fontVariantNumeric:"tabular-nums" }}>{entries.length}件</span>
+                </button>
+              );
+            })}
+          </div>
+
+          {selected && grouped[selected] && (
+            <div style={{ background:"#13192a", border:"1px solid #2c4a6a", borderRadius:10, padding:"10px 12px" }}>
+              <div style={{ fontSize:14, fontWeight:700, color:"#9fd0ff", marginBottom:8 }}>
+                {selected} ─ {grouped[selected].length}件の型
+              </div>
+              <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+                {grouped[selected].map((entry) => {
+                  const nat = natStr(entry.nature);
+                  const moves = (entry.moves || []).filter(Boolean);
+                  const sp = spTotal(entry.sp);
+                  return (
+                    <div key={entry.boxId} style={{ background:"#1a2338", border:"1px solid #2c3854", borderRadius:7, padding:"7px 10px", display:"flex", alignItems:"flex-start", gap:8 }}>
+                      <div style={{ flex:1, minWidth:0 }}>
+                        <div style={{ display:"flex", gap:8, flexWrap:"wrap", alignItems:"center", marginBottom: moves.length ? 3 : 0 }}>
+                          <span style={{ fontSize:13, fontWeight:700, color:"#c4d4f0" }}>{entry.ability || "—"}</span>
+                          {entry.item && entry.item !== "その他" && (
+                            <span style={{ fontSize:12, color:"#9ab4c8", background:"#1c2a3c", padding:"1px 6px", borderRadius:4 }}>{entry.item}</span>
+                          )}
+                          {nat && <span style={{ fontSize:12, color:"#b8a0f0" }}>{nat}</span>}
+                          {sp > 0 && <span style={{ fontSize:11, color:"#7a90ae" }}>SP合計{sp}</span>}
+                        </div>
+                        {moves.length > 0 && (
+                          <div style={{ fontSize:12, color:"#8a9ab8", lineHeight:1.4 }}>{moves.join(" / ")}</div>
+                        )}
+                      </div>
+                      <div style={{ display:"flex", gap:4, flexShrink:0 }}>
+                        {pokemonData.length > 0 && (
+                          <button onClick={() => { closeEditor(); setEditingId(entry.boxId); }} title="編集"
+                            style={{ width:22, height:22, lineHeight:"20px", fontSize:11, padding:0, borderRadius:4, border:"none", background:"#1e3a5c", color:"#9fd0ff", cursor:"pointer" }}>
+                            ✎
+                          </button>
+                        )}
+                        <button onClick={() => removeFromBox?.(entry.boxId)} title="削除"
+                          style={{ width:22, height:22, lineHeight:"20px", fontSize:12, padding:0, borderRadius:4, border:"none", background:"#3a2424", color:"#c8a0a0", cursor:"pointer" }}>
+                          ✕
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              {pokemonData.length > 0 && (
+                <button onClick={() => { closeEditor(); setAddingFor({ name: selected }); }}
+                  style={{ marginTop:8, width:"100%", fontSize:12, padding:"5px 0", borderRadius:5, border:"1px dashed #3a5a7a", background:"transparent", color:"#7abadc", cursor:"pointer" }}>
+                  ＋ 新たに追加
+                </button>
+              )}
+            </div>
+          )}
+        </div>
       )}
     </div>
   );

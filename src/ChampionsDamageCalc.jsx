@@ -1,10 +1,11 @@
 /* global __APP_VERSION__ */ // vite.config.js の define でビルド時に package.json の version へ置換
 import { useState, useMemo, useEffect, useRef } from "react";
 import { M_DATA, POKEMON_DATA } from "./pokedex-data.js";
-import { MOVE_USAGE, MOVE_USAGE_META, ABILITY_USAGE } from "./usage-data.js";
+import { MOVE_USAGE, MOVE_USAGE_META, ABILITY_USAGE, MOVE_USAGE_DOUBLES, ABILITY_USAGE_DOUBLES } from "./usage-data.js";
+import { FORM_USAGE_BASE } from "./forme-usage-base.js";
 import { ITEM_FLING } from "./item-fling.js";
 import { RecognitionPanel } from "./RecognitionPanel.jsx";
-import { TeamPanel, TeamBar, useMyTeams, iconOf } from "./TeamPanel.jsx";
+import { TeamPanel, useMyTeams, iconOf, BoxPanel } from "./TeamPanel.jsx";
 import { MEGA_FORMS } from "./megaIcons.js";
 import { useObs, obsShot } from "./obsClient.js";
 import FeedbackPanel from "./FeedbackPanel.jsx";
@@ -67,24 +68,15 @@ for (const k of ["つのドリル", "ハサミギロチン", "ぜったいれい
 const POKEMON = POKEMON_DATA;
 
 // もちもの: 攻撃側/防御側で有効なものが別。マイチームは和集合で保持し、反映時に各側の有効分だけ適用
-const ATK_ITEMS = ["なし", "タイプ強化(×1.2)", "いのちのたま", "ちからのハチマキ", "ものしりメガネ", "たつじんのおび", "メトロノーム", "でんきだま"];
-const DEF_ITEMS = ["なし", "抜群半減きのみ"];
-const ALL_ITEMS = ["なし", "タイプ強化(×1.2)", "いのちのたま", "ちからのハチマキ", "ものしりメガネ", "たつじんのおび", "メトロノーム", "でんきだま", "抜群半減きのみ"];
+const ATK_ITEMS = ["その他", "なし", "タイプ強化(×1.2)", "いのちのたま", "ちからのハチマキ", "ものしりメガネ", "たつじんのおび", "メトロノーム", "でんきだま"];
+const DEF_ITEMS = ["その他", "なし", "抜群半減きのみ"];
+const ALL_ITEMS = ["その他", "なし", "タイプ強化(×1.2)", "いのちのたま", "ちからのハチマキ", "ものしりメガネ", "たつじんのおび", "メトロノーム", "でんきだま", "抜群半減きのみ"];
 const isMega = (p) => /[（(]メガ/.test(p?.name || ""); // メガシンカ(メガストーン保持)＝他の持ち物は持てない
 // メガ種の採用率はベース種と技プールが共通 → メガ専用データが無ければ「(メガ)」を外したベース種の採用率を使う
-// フォルム違い（マイティ/ブレード/パンプジン各サイズ/パルデアケンタロス炎・水）も技プールが共通 → 既定フォルムの採用率を流用
-const FORM_USAGE_BASE = {
-  "イルカマン(マイティ)": "イルカマン(ナイーブ)",
-  "ギルガルド(ブレード)": "ギルガルド(シールド)",
-  "ケンタロス(パルデア炎)": "ケンタロス(パルデア単)",
-  "ケンタロス(パルデア水)": "ケンタロス(パルデア単)",
-  "パンプジン(小)": "パンプジン(普通)",
-  "パンプジン(大)": "パンプジン(普通)",
-  "パンプジン(特大)": "パンプジン(普通)",
-};
-const usageMapFor = (name) => MOVE_USAGE[name] || MOVE_USAGE[FORM_USAGE_BASE[name]] || MOVE_USAGE[name.replace(/\(メガ[XY]?\)$/, "")] || {};
+// フォルム違いは技プールが共通 → 既定フォルムの採用率を流用（FORM_USAGE_BASE。TeamPanelと共有）
+const usageMapFor = (name, src = MOVE_USAGE) => src[name] || src[FORM_USAGE_BASE[name]] || src[name.replace(/\(メガ[XY]?\)$/, "")] || {};
 // 特性の採用率マップ（メガ・フォルム違いはベース/既定フォルムにフォールバック）
-const abilityUsageMapFor = (name) => ABILITY_USAGE[name] || ABILITY_USAGE[FORM_USAGE_BASE[name]] || ABILITY_USAGE[name.replace(/\(メガ[XY]?\)$/, "")] || {};
+const abilityUsageMapFor = (name, src = ABILITY_USAGE) => src[name] || src[FORM_USAGE_BASE[name]] || src[name.replace(/\(メガ[XY]?\)$/, "")] || {};
 // イルカマン/ギルガルド: メガと同様にワンボタンでフォルムチェンジ（双方向）
 const FORM_SIBLING = {
   "イルカマン(ナイーブ)": "イルカマン(マイティ)",
@@ -93,8 +85,8 @@ const FORM_SIBLING = {
   "ギルガルド(ブレード)": "ギルガルド(シールド)",
 };
 // 特性を採用率順に並べた [{x, u}] を返す（採用率データの無い特性は末尾・元の順）
-const abilityOptions = (poke) => {
-  const u = abilityUsageMapFor(poke.name);
+const abilityOptions = (poke, abSrc = ABILITY_USAGE) => {
+  const u = abilityUsageMapFor(poke.name, abSrc);
   const abils = poke.abilities?.length ? poke.abilities : ["なし"];
   // 特性が1つしかないポケモンは取得データに関わらず必ず100%
   return abils.map((x) => ({ x, u: abils.length === 1 ? 100 : u[x] })).sort((a, b) => (b.u ?? -1) - (a.u ?? -1));
@@ -120,9 +112,10 @@ const typeEffectScrappy = (moveType, defTypes, scrappy) => defTypes.reduce((m, t
 }, 1);
 
 function calcRolls(env) {
-  const { power, A, D, weatherMul, crit, critMul = 1.5, stab, stabMul = 1.5, eff, burn, wall, helpingHand, resistBerry, postEffMul = 1 } = env;
+  const { power, A, D, weatherMul, crit, critMul = 1.5, stab, stabMul = 1.5, eff, burn, wall, wallMul = 0.5, helpingHand, resistBerry, postEffMul = 1, spreadMul = 1, friendGuardMul = 1 } = env;
   const pw = helpingHand ? f(power * 1.5) : power;
-  const base = f(22 * pw * A / D / 50) + 2;
+  let base = f(22 * pw * A / D / 50) + 2;
+  if (spreadMul !== 1) base = f(base * spreadMul); // 範囲技補正（ターゲット補正、乱数より前に適用）
   const rolls = [];
   for (let R = 85; R <= 100; R++) {
     let d = base;
@@ -134,7 +127,8 @@ function calcRolls(env) {
     if (resistBerry && eff > 1) d = f(d * 0.5); // 抜群半減きのみ
     if (postEffMul !== 1) d = f(d * postEffMul); // 防御側特性などの最終補正
     if (burn) d = f(d * 0.5);
-    if (wall && !crit) d = f(d * 0.5);
+    if (wall && !crit) d = f(d * wallMul); // ダブル: 2/3、シングル: 0.5
+    if (friendGuardMul !== 1) d = f(d * friendGuardMul); // フレンドガード ×0.75
     if (eff > 0 && d < 1) d = 1;
     rolls.push(d);
   }
@@ -296,6 +290,13 @@ const WALL_BREAK_MOVES = new Set(["サイコファング", "かわらわり"]);
 const SPA_BOOST_MOVES = new Set(["エレクトロビーム", "メテオビーム"]);
 // しめりけ（自他問わず）で失敗する爆発技
 const EXPLOSION_MOVES = new Set(["だいばくはつ", "じばく", "ミストバースト"]);
+// ダブルバトル: 複数対象の範囲技（×0.75補正対象）。allAdjacent / allAdjacentFoes 系
+const SPREAD_MOVES = new Set([
+  "じしん", "なみのり", "ほうでん", "ヘドロウェーブ", "はなふぶき",
+  "ふぶき", "ねっぷう", "エアカッター", "こごえるかぜ", "エレキネット",
+  "バークアウト", "みわくのボイス", "ハイパーボイス", "マジカルシャイン",
+  "だいばくはつ", "じばく", "ワイドフォース",
+]);
 // レイジングブル: パルデアケンタロスのフォルムでタイプが変わる（フォルム名→タイプ）
 const RAGING_BULL_TYPE = { "ケンタロス(パルデア単)": "かくとう", "ケンタロス(パルデア炎)": "ほのお", "ケンタロス(パルデア水)": "みず" };
 // フィールド→タイプ（だいちのはどう・ぎたい等で使用）
@@ -880,7 +881,7 @@ export default function ChampionsDamageCalc() {
   const [burn, setBurn] = useState(false);
   const [helpingHand, setHelpingHand] = useState(false);
   const [hits, setHits] = useState(0); // 0=確率(2〜5回)モード, 1〜5=固定ヒット数
-  const [atkItem, setAtkItem] = useState("なし");
+  const [atkItem, setAtkItem] = useState("その他");
   const [metroCount, setMetroCount] = useState(1); // メトロノーム: 同じ技の連続使用回数(1〜6)。威力×(1+0.2×(n-1))最大2.0
   const [atkAbility, setAtkAbility] = useState("なし");
   const [condOn, setCondOn] = useState(false);
@@ -919,7 +920,7 @@ export default function ChampionsDamageCalc() {
   const [wall, setWall] = useState(false);
   const [weatherSel, setWeather] = useState("なし");
   const [terrain, setTerrain] = useState("なし");
-  const [defItem, setDefItem] = useState("なし");
+  const [defItem, setDefItem] = useState("その他");
   const [defAbility, setDefAbility] = useState("なし");
   const [defAbilityOn, setDefAbilityOn] = useState(false);
   const [defAutoOff, setDefAutoOff] = useState(false);
@@ -933,6 +934,18 @@ export default function ChampionsDamageCalc() {
   const [dmgLog, setDmgLog] = useState([]); // 合算ログ: {id,label,dist,min,max,hp,checked,fixed}
   const [fixedDmg, setFixedDmg] = useState(""); // 固定ダメージ手動入力
   const [includeCurrent, setIncludeCurrent] = useState(true); // 合算に「今計算している結果」を含める
+  const [isDouble, setIsDouble] = useState(false);           // シングル/ダブルバトルモード
+  const [singleTarget, setSingleTarget] = useState(false);    // 範囲技をシングルターゲットで計算
+  const [friendGuard, setFriendGuard] = useState(false);      // フレンドガード（ダブルのみ）
+  const [fairyAuraDouble, setFairyAuraDouble] = useState(false); // 味方のフェアリーオーラ（ダブルのみ）
+  // バトルモードに応じた採用率データ
+  const currentMoveUsage = isDouble ? MOVE_USAGE_DOUBLES : MOVE_USAGE;
+  const currentAbilityUsage = isDouble ? ABILITY_USAGE_DOUBLES : ABILITY_USAGE;
+  // ダメ計タブの自チームはシングル/ダブルで別管理
+  const railTeams  = isDouble ? myTeams.teamsD  : myTeams.teams;
+  const railNames  = isDouble ? myTeams.namesD  : myTeams.names;
+  const railActive = isDouble ? myTeams.activeD : myTeams.active;
+  const setRailActive = isDouble ? myTeams.setActiveD : myTeams.setActive;
   const [sandTurns, setSandTurns] = useState("1"); // 砂のターン数
   const [statusTurns, setStatusTurns] = useState("1"); // 状態異常のターン数
   const [hideLowUsage, setHideLowUsage] = useState(false);
@@ -951,11 +964,11 @@ export default function ChampionsDamageCalc() {
   // すばやさ比較ツール用: ダメ計の左側=自ポケ・右側=相手（攻守交代しても左右は固定）。左ポケが登録済みならその実数値(SP/性格)を使う
   const spdOwn = atkOnRight ? defender : attacker;   // 左パネルのポケ＝自分
   const spdEnemy = atkOnRight ? attacker : defender; // 右パネルのポケ＝相手
-  const ownMember = (myTeams.teams[myTeams.active] || []).find((m) => m && m.name === spdOwn.name) || null;
+  const ownMember = (railTeams[railActive] || []).find((m) => m && m.name === spdOwn.name) || null;
 
   // ポケモン変更時: 「影響あり特性の中で採用率が最大」を自動選択（影響なし特性は除く）、発動はオフに戻す
   const defaultAbility = (p) => {
-    const usage = abilityUsageMapFor(p.name);
+    const usage = abilityUsageMapFor(p.name, currentAbilityUsage);
     const byUsage = (arr) => (arr.length ? [...arr].sort((a, b) => (usage[b] ?? -1) - (usage[a] ?? -1))[0] : null);
     const list = p.abilities || [];
     return byUsage(list.filter((a) => DAMAGE_ABILITIES.has(a))) ?? byUsage(list) ?? "なし";
@@ -965,7 +978,7 @@ export default function ChampionsDamageCalc() {
     if (applyingMemberRef.current) { applyingMemberRef.current = false; return; }
     setAtkAbility(defaultAbility(attacker)); setAtkAbilityOn(false);
     // 別ポケを選んだ時はSP/性格/ランク/もちもの/戦況トグルも既定に戻す（登録・敵アイコン・攻守交代はガードで抑止される）
-    setAtkSp(32); setAtkNature(1.1); setAtkRank(0); setBoostCount(0); setAtkItem("なし");
+    setAtkSp(32); setAtkNature(1.1); setAtkRank(0); setBoostCount(0); setAtkItem("その他");
     setCrit(false); setBurn(false); setHelpingHand(false); setHits(0);
   }, [atkIdx]);
   const applyingDefMemberRef = useRef(false); // マイチーム適用中は防御側特性の自動リセットを抑止
@@ -973,7 +986,7 @@ export default function ChampionsDamageCalc() {
     if (applyingDefMemberRef.current) { applyingDefMemberRef.current = false; return; }
     setDefAbility(defaultAbility(defender)); setDefAbilityOn(false);
     // 別ポケを選んだ時は防御側のSP/性格/ランク/壁/もちものも既定に戻す
-    setHpSp(0); setBSp(0); setDSp(0); setBNature(1.0); setDNature(1.0); setDefRank(0); setWall(false); setDefItem("なし");
+    setHpSp(0); setBSp(0); setDSp(0); setBNature(1.0); setDNature(1.0); setDefRank(0); setWall(false); setDefItem("その他");
   }, [defIdx]);
   // メガシンカは持ち物を持てない＝選んだら持ち物を「なし」に強制
   useEffect(() => { if (isMega(attacker)) setAtkItem("なし"); }, [atkIdx]);
@@ -994,7 +1007,7 @@ export default function ChampionsDamageCalc() {
     if (attackMoves.length) setMoveHist((prev) => ({ ...prev, [m.name]: attackMoves.slice(0, 8) })); // 覚えている攻撃技を全部「最近使った技」に表示
     setAtkSp(m.sp?.[offStat] ?? 0);
     setAtkNature(natureMul);
-    setAtkItem(m.item || "なし"); // 実物の持ち物名のまま反映（攻撃に効かない物は欄で(影響なし)表示）
+    setAtkItem(m.item || "その他"); // 実物の持ち物名のまま反映（攻撃に効かない物は欄で(影響なし)表示）
     setAtkAbility(m.ability || defaultAbility(poke));
     setAtkAbilityOn(false);
   }
@@ -1012,7 +1025,7 @@ export default function ChampionsDamageCalc() {
     setDSp(m.sp?.d ?? 0);
     setBNature(nat("b"));
     setDNature(nat("d"));
-    setDefItem(m.item || "なし"); // 実物の持ち物名のまま反映（防御に効かない物は欄で(影響なし)表示）
+    setDefItem(m.item || "その他"); // 実物の持ち物名のまま反映（防御に効かない物は欄で(影響なし)表示）
     setDefAbility(m.ability || defaultAbility(poke));
     setDefAbilityOn(false);
   }
@@ -1039,11 +1052,11 @@ export default function ChampionsDamageCalc() {
     if (isAtk) {
       applyingMemberRef.current = true; setAtkIdx(idx);
       if (s) { setAtkSp(s.atkSp); setAtkNature(s.atkNature); setAtkAbility(s.atkAbility); setAtkAbilityOn(s.atkAbilityOn); setAtkRank(s.atkRank); setBoostCount(s.boostCount); setAtkItem(s.atkItem); setCrit(s.crit); setBurn(s.burn); setHelpingHand(s.helpingHand); setHits(s.hits); }
-      else { setAtkSp(32); setAtkNature(1.1); setAtkAbility(defaultAbility(POKEMON[idx])); setAtkAbilityOn(false); setAtkRank(0); setBoostCount(0); setAtkItem("なし"); setCrit(false); setBurn(false); setHelpingHand(false); setHits(0); }
+      else { setAtkSp(32); setAtkNature(1.1); setAtkAbility(defaultAbility(POKEMON[idx])); setAtkAbilityOn(false); setAtkRank(0); setBoostCount(0); setAtkItem("その他"); setCrit(false); setBurn(false); setHelpingHand(false); setHits(0); }
     } else {
       applyingDefMemberRef.current = true; setDefIdx(idx);
       if (s) { setHpSp(s.hpSp); setBSp(s.bSp); setDSp(s.dSp); setBNature(s.bNature); setDNature(s.dNature); setDefAbility(s.defAbility); setDefAbilityOn(s.defAbilityOn); setDefRank(s.defRank); setWall(s.wall); setDefItem(s.defItem); }
-      else { setHpSp(0); setBSp(0); setDSp(0); setBNature(1.0); setDNature(1.0); setDefAbility(defaultAbility(POKEMON[idx])); setDefAbilityOn(false); setDefRank(0); setWall(false); setDefItem("なし"); }
+      else { setHpSp(0); setBSp(0); setDSp(0); setBNature(1.0); setDNature(1.0); setDefAbility(defaultAbility(POKEMON[idx])); setDefAbilityOn(false); setDefRank(0); setWall(false); setDefItem("その他"); }
     }
   };
   const applyMember = (m, side) => (side === "def" ? applyToEnemy(m) : applyToOwn(m));
@@ -1088,6 +1101,9 @@ export default function ChampionsDamageCalc() {
   const atkAbilityEff = atkAbility === "トレース" ? (tracedAbility || "なし") // トレースはコピー/選択した特性として扱う（常に発動）
     : isAutoAbility(atkAbility) ? (atkAutoOff ? "なし" : atkAbility) : (atkAbilityOn || (atkAbility === "こんじょう" && burn)) ? atkAbility : "なし"; // 自動特性は手動オフ可。こんじょうはやけど中なら自動オン
   const wallEff = wall && atkAbilityEff !== "すりぬけ"; // すりぬけは壁(リフレクター/ひかりのかべ)を無視
+  // ダブルバトル専用: 壁倍率/フレンドガード（moveKeyに依存しないものはここで）
+  const wallMul = isDouble ? 2732 / 4096 : 0.5;           // ダブル壁 ×2/3 (2732/4096)
+  const friendGuardMul = (isDouble && friendGuard) ? 3072 / 4096 : 1; // フレンドガード ×0.75
   const defAbilityRaw = isAutoAbility(defAbility) ? (defAutoOff ? "なし" : defAbility) : defAbilityOn ? defAbility : "なし";
   // フィールド: 発動中のフィールド特性(エレキメイカー等)を優先、無ければ手動選択(terrain)
   const terrainEff = TERRAIN_ABILITY[atkAbilityEff] || TERRAIN_ABILITY[defAbilityRaw] || terrain;
@@ -1105,7 +1121,7 @@ export default function ChampionsDamageCalc() {
   // ランク実効値(atkRankEff/defRankEff)はランク変化特性の発動段数も反映するため、move解決後に算出（下方）
 
   const moveList = useMemo(() => {
-    const usage = usageMapFor(attacker.name);
+    const usage = usageMapFor(attacker.name, currentMoveUsage);
     const list = attacker.learnset
       .map((n) => ({ name: n, ...M[n], usage: usage[n] }))
       .filter((m) => m.t && !(hideLowUsage && LOW_USAGE_MOVES.has(m.name)));
@@ -1116,7 +1132,7 @@ export default function ChampionsDamageCalc() {
       return a.name.localeCompare(b.name, "ja");
     });
     return list;
-  }, [attacker, hideLowUsage]);
+  }, [attacker, hideLowUsage, currentMoveUsage]);
 
   useEffect(() => {
     if (!moveList.find((m) => m.name === moveName)) setMoveName(moveList[0]?.name ?? "");
@@ -1149,6 +1165,9 @@ export default function ChampionsDamageCalc() {
     : M[moveName] ? { name: moveName, ...M[moveName] } : { name: "", t: "ノーマル", c: "物理", p: 0 };
   // 技名依存の効果（キバ技・状況技など）は手動入力時は無効
   const moveKey = customOn ? "" : moveName;
+  // ダブル: 範囲技補正（moveKey確定後に判定）
+  const isSpread = isDouble && SPREAD_MOVES.has(moveKey) && !singleTarget;
+  const spreadMul = isSpread ? 3072 / 4096 : 1; // 範囲技 ×0.75 (3072/4096)
   // 威力を状況から自動算出する技(なげつける/きしかいせい/ふんか/アシストパワー/ヘビーボンバー/はきだす等)
   const varCalc = customOn ? null : VAR_CALC[moveName];
   // HP割合: 自ポケ(左=atkOnRight false)が撃つ時は実数値入力、相手ポケ(右)が撃つ時は％入力
@@ -1283,6 +1302,10 @@ export default function ChampionsDamageCalc() {
     effPower = f(effPower * 4 / 3);
     if (atkAbilityEff === "フェアリーオーラ") atkAbNote = "フェアリーオーラ: フェアリー技×1.33";
   }
+  // ダブル: 味方のフェアリーオーラ（個別にスタック）
+  if (isDouble && fairyAuraDouble && effType === "フェアリー") {
+    effPower = f(effPower * 4 / 3);
+  }
 
   // ランク変化系特性は「ランク欄」へ直接反映する方式に変更（RankAbilityBtn→setAtkRank/setDefRank）。ここは素のランクを使う。てんねんは相手のランク変化を無視
   const atkRankEff = defAbilityEff === "てんねん" ? 0 : atkRank;
@@ -1296,6 +1319,8 @@ export default function ChampionsDamageCalc() {
   // しめりけ（自分/相手どちらかが持つ）は爆発技を失敗させる＝ダメージ0扱い
   const dampFail = (atkAbilityEff === "しめりけ" || defAbilityRaw === "しめりけ") && EXPLOSION_MOVES.has(moveKey);
   if (dampFail) condNote = "しめりけで失敗（爆発技は出せない）";
+  const polterFail = moveKey === "ポルターガイスト" && defItem === "なし";
+  if (polterFail) condNote = "相手の持ち物なし：失敗";
   {
     if (moveKey === "アクロバット" && atkItem === "なし") { effPower = f(effPower * 2); condNote = "もちものなし 威力×2"; }
     if (moveKey === "からげんき" && (condOn || burn)) { effPower = f(effPower * 2); ignoreBurn = burn; condNote = burn ? "状態異常(やけど) 威力×2・攻撃半減なし" : "状態異常 威力×2"; }
@@ -1373,6 +1398,7 @@ export default function ChampionsDamageCalc() {
     let eff = typeEffectScrappy(effType, defTypes, atkAbilityEff === "きもったま");
     if (moveKey === "フリーズドライ" && defTypes.includes("みず")) eff *= 4; // フリーズドライ: みずにも抜群（こおり×みず 0.5→2）
     if (dampFail) eff = 0; // しめりけ: 爆発技は失敗（無効化）
+    if (polterFail) eff = 0; // ポルターガイスト: 相手の持ち物なし→失敗
     if (ABILITY_IMMUNE[defAbilityEff]?.includes(effType) || (defAbilityEff === "ぼうおん" && SOUND_MOVES.has(moveKey)) || ((defAbilityEff === "テイルアーマー" || defAbilityEff === "じょおうのいげん") && PRIORITY_MOVES.has(moveKey)) || (defAbilityEff === "ぼうだん" && BALL_BOMB_MOVES.has(moveKey))) eff = 0; // もらいび・ふゆう等
 
     if (MOVE_EXTRA_TYPE[moveKey]) eff *= typeEffectScrappy(MOVE_EXTRA_TYPE[moveKey], defTypes, atkAbilityEff === "きもったま"); // フライングプレス: かくとう×ひこうの複合相性
@@ -1397,8 +1423,8 @@ export default function ChampionsDamageCalc() {
 
     const env = {
       power: effPower, A, D, weatherMul, crit: critEff, critMul: atkAbilityEff === "スナイパー" ? 2.25 : 1.5, stab, stabMul, eff,
-      burn: burn && isPhysical && !ignoreBurn, wall: wallEff && !WALL_BREAK_MOVES.has(moveKey), helpingHand,
-      resistBerry: resistBerryActive, postEffMul,
+      burn: burn && isPhysical && !ignoreBurn, wall: wallEff && !WALL_BREAK_MOVES.has(moveKey), wallMul, helpingHand,
+      resistBerry: resistBerryActive, postEffMul, spreadMul, friendGuardMul,
     };
     const rolls = calcRolls(env);
 
@@ -1408,8 +1434,8 @@ export default function ChampionsDamageCalc() {
     if (parentalBond) {
       const rolls2 = calcRolls({
         power: effPower, A, D, weatherMul, crit: critEff, critMul: atkAbilityEff === "スナイパー" ? 2.25 : 1.5, stab, stabMul, eff,
-        burn: burn && isPhysical && !ignoreBurn, wall: wallEff, helpingHand,
-        resistBerry: resistBerryActive, postEffMul: postEffMul * 0.25,
+        burn: burn && isPhysical && !ignoreBurn, wall: wallEff, wallMul, helpingHand,
+        resistBerry: resistBerryActive, postEffMul: postEffMul * 0.25, spreadMul, friendGuardMul,
       });
       dispRolls = rolls.map((r, i) => r + rolls2[i]); // 表示用: 各乱数で1発目+2発目の合計
       nHits = 2;
@@ -1459,7 +1485,7 @@ export default function ChampionsDamageCalc() {
       minPct: (useMin / HP) * 100, maxPct: (useMax / HP) * 100,
       ko: koSummary(useDist, HP, useMin, useMax),
     };
-  }, [attacker, defender, move, effType, effPower, isFixedMove, fixedDmgVal, isPhysical, isMulti, hits, atkSp, atkNature, atkRank, crit, burn, helpingHand, hpSp, bSp, dSp, bNature, dNature, defRank, wall, weather, critEff, lightBall, atkItem, defItem, atkAbilityEff, defAbilityEff, stabMul, aAbilityMul, ignoreBurn, protean, proteanType, noWeather]);
+  }, [attacker, defender, move, effType, effPower, isFixedMove, fixedDmgVal, isPhysical, isMulti, hits, atkSp, atkNature, atkRank, crit, burn, helpingHand, hpSp, bSp, dSp, bNature, dNature, defRank, wall, weather, critEff, lightBall, atkItem, defItem, atkAbilityEff, defAbilityEff, stabMul, aAbilityMul, ignoreBurn, protean, proteanType, noWeather, isDouble, singleTarget, friendGuard, fairyAuraDouble]);
 
   // ===== 逆算: 与ダメ%から相手の(HP SP, 防御SP, 性格)候補を推定 =====
   const [curHpPct, setCurHpPct] = useState("");
@@ -1487,6 +1513,7 @@ export default function ChampionsDamageCalc() {
     let eff = typeEffectScrappy(effType, defTypes, atkAbilityEff === "きもったま");
     if (moveKey === "フリーズドライ" && defTypes.includes("みず")) eff *= 4; // フリーズドライ: みずにも抜群（こおり×みず 0.5→2）
     if (dampFail) eff = 0; // しめりけ: 爆発技は失敗（無効化）
+    if (polterFail) eff = 0; // ポルターガイスト: 相手の持ち物なし→失敗
     if (ABILITY_IMMUNE[defAbilityEff]?.includes(effType) || (defAbilityEff === "ぼうおん" && SOUND_MOVES.has(moveKey)) || ((defAbilityEff === "テイルアーマー" || defAbilityEff === "じょおうのいげん") && PRIORITY_MOVES.has(moveKey)) || (defAbilityEff === "ぼうだん" && BALL_BOMB_MOVES.has(moveKey))) eff = 0;
     let postEffMul = ABILITY_TYPE_MUL[defAbilityEff]?.[effType] ?? 1;
     if (defAbilityEff === "もふもふ" && contact) postEffMul *= 0.5; // もふもふ: 接触技を半減（えんかくで無効・ほのお×2は上のmulで処理）
@@ -1505,8 +1532,8 @@ export default function ChampionsDamageCalc() {
         D = rankMul(D, critEff && defRankEff > 0 ? 0 : defRankEff);
         const rolls = calcRolls({
           power: effPower, A, D, weatherMul, crit: critEff, critMul: atkAbilityEff === "スナイパー" ? 2.25 : 1.5, stab, stabMul, eff,
-          burn: burn && isPhysical && !ignoreBurn, wall: wallEff, helpingHand,
-          resistBerry: resistBerryActive, postEffMul,
+          burn: burn && isPhysical && !ignoreBurn, wall: wallEff, wallMul, helpingHand,
+          resistBerry: resistBerryActive, postEffMul, spreadMul, friendGuardMul,
         });
         for (const hsp of SP_STEPS) {
           if (hsp + dsp > 66) continue;
@@ -1526,7 +1553,7 @@ export default function ChampionsDamageCalc() {
     // 高い順にソート（性格→防SP→HP SP）
     candidates.sort((a, b) => b.nat - a.nat || b.dsp - a.dsp || b.hsp - a.hsp);
     return { count: candidates.length, candidates };
-  }, [curHpPct, healItem, attacker, defender, move, effType, effPower, isPhysical, isMulti, atkSp, atkNature, atkRank, crit, burn, helpingHand, defRank, wall, weather, critEff, lightBall, defItem, atkAbilityEff, defAbilityEff, stabMul, aAbilityMul, ignoreBurn, protean, proteanType, noWeather]);
+  }, [curHpPct, healItem, attacker, defender, move, effType, effPower, isPhysical, isMulti, atkSp, atkNature, atkRank, crit, burn, helpingHand, defRank, wall, weather, critEff, lightBall, defItem, atkAbilityEff, defAbilityEff, stabMul, aAbilityMul, ignoreBurn, protean, proteanType, noWeather, isDouble, singleTarget, friendGuard, fairyAuraDouble]);
 
 
   // ポケモン切替時: 最後に使った技を復元
@@ -1641,6 +1668,7 @@ export default function ChampionsDamageCalc() {
     let eff = typeEffectScrappy(effType, defTypes, atkAbilityEff === "きもったま");
     if (moveKey === "フリーズドライ" && defTypes.includes("みず")) eff *= 4; // フリーズドライ: みずにも抜群（こおり×みず 0.5→2）
     if (dampFail) eff = 0; // しめりけ: 爆発技は失敗（無効化）
+    if (polterFail) eff = 0; // ポルターガイスト: 相手の持ち物なし→失敗
     if (ABILITY_IMMUNE[defAbilityEff]?.includes(effType) || (defAbilityEff === "ぼうおん" && SOUND_MOVES.has(moveKey)) || ((defAbilityEff === "テイルアーマー" || defAbilityEff === "じょおうのいげん") && PRIORITY_MOVES.has(moveKey)) || (defAbilityEff === "ぼうだん" && BALL_BOMB_MOVES.has(moveKey))) eff = 0;
     let postEffMul = ABILITY_TYPE_MUL[defAbilityEff]?.[effType] ?? 1;
     if (defAbilityEff === "もふもふ" && contact) postEffMul *= 0.5; // もふもふ: 接触技を半減（えんかくで無効・ほのお×2は上のmulで処理）
@@ -1657,8 +1685,8 @@ export default function ChampionsDamageCalc() {
         if (aAbilityMul !== 1) A = f(A * aAbilityMul);
         const rolls = calcRolls({
           power, A, D, weatherMul, crit: critEff, critMul: atkAbilityEff === "スナイパー" ? 2.25 : 1.5, stab, stabMul, eff,
-          burn: burn && isPhysical && !ignoreBurn, wall: wallEff, helpingHand,
-          resistBerry: resistBerryActive, postEffMul,
+          burn: burn && isPhysical && !ignoreBurn, wall: wallEff, wallMul, helpingHand,
+          resistBerry: resistBerryActive, postEffMul, spreadMul, friendGuardMul,
         });
         if (rolls.includes(dmg)) cands.push({ nat, asp });
       }
@@ -1681,7 +1709,7 @@ export default function ChampionsDamageCalc() {
       ...(exclBandGlasses ? [] : [{ label: `${isPhysical ? "ちからのハチマキ" : "ものしりメガネ"}(×1.1)`, item: isPhysical ? "ちからのハチマキ" : "ものしりメガネ", candidates: estimate(f(effPowerNoItem * 1.1), false) }]),
     ];
     return { sets };
-  }, [dmgTaken, attacker, defender, move, effType, effPower, effPowerNoItem, atkItem, atkInferItem, exclBandGlasses, isPhysical, isMulti, atkRank, crit, burn, helpingHand, bSp, dSp, bNature, dNature, defRank, wall, weather, critEff, lightBall, defItem, stabMul, aAbilityMul, ignoreBurn, protean, proteanType, noWeather, defAbilityEff, atkAbilityEff]);
+  }, [dmgTaken, attacker, defender, move, effType, effPower, effPowerNoItem, atkItem, atkInferItem, exclBandGlasses, isPhysical, isMulti, atkRank, crit, burn, helpingHand, bSp, dSp, bNature, dNature, defRank, wall, weather, critEff, lightBall, defItem, stabMul, aAbilityMul, ignoreBurn, protean, proteanType, noWeather, defAbilityEff, atkAbilityEff, isDouble, singleTarget, friendGuard, fairyAuraDouble]);
   // 攻撃力推定モーダルの持ち物トグル（判明といのちのたまは排他＝単一state）。いのちのたまは外側の持ち物欄と同期
   const toggleInferKnown = () => { setAtkItem("なし"); setAtkInferItem(atkInferItem === "known" ? "unknown" : "known"); }; // 判明=タイプ強化系でない→持ち物なし換算
   const toggleInferOrb = () => { const next = atkInferItem === "orb" ? "unknown" : "orb"; setAtkItem(next === "orb" ? "いのちのたま" : "なし"); setAtkInferItem(next); };
@@ -1940,7 +1968,7 @@ export default function ChampionsDamageCalc() {
         @keyframes snowIn{from{top:-6%}to{top:106%;transform:translateX(24px)}}
         @keyframes sandIn{from{left:-10%}to{left:108%;transform:translateY(14px)}}
         header.top{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:6px}
-        .opts{margin-left:auto;position:relative}
+        .opts{position:relative}
         .gear{background:#161d2e;border:1px solid #2c3854;border-radius:8px;color:#c4cede;font-size:15px;padding:5px 9px;cursor:pointer}
         .gear:hover{border-color:#3d4f78;color:#fff}
         .opts-menu{position:absolute;top:calc(100% + 6px);right:0;z-index:200;background:#161d2e;border:1px solid #3d4f78;border-radius:10px;padding:12px;box-shadow:0 8px 24px rgba(0,0,0,.5);min-width:180px}
@@ -1954,13 +1982,13 @@ export default function ChampionsDamageCalc() {
         .sub{font-size:11px;color:#7c879c}
         .spec{font-size:11px;color:#7c879c;margin:0 0 6px}
         /* 公開直後のお知らせバナー（SHOW_RELEASE_NOTICEで制御） */
-        .release-notice{display:flex;align-items:flex-start;gap:12px;margin:2px 0 12px;padding:13px 15px;background:linear-gradient(90deg,rgba(255,150,60,.17),rgba(255,120,60,.06));border:1px solid rgba(255,150,70,.5);border-left:4px solid #ff8a3c;border-radius:11px}
-        .release-notice-icon{font-size:24px;line-height:1.25;flex:none}
-        .release-notice-body{flex:1;margin:0;font-size:14.5px;line-height:1.65;color:#ffe6cb}
-        .release-notice-body b{color:#ffd49a;font-size:15.5px}
-        .release-notice-link{background:none;border:0;color:#ffd089;font-weight:800;cursor:pointer;font-size:14.5px;text-decoration:underline;padding:0 1px}
+        .release-notice{display:flex;align-items:center;gap:10px;margin:2px 0 10px;padding:7px 12px;background:linear-gradient(90deg,rgba(255,150,60,.17),rgba(255,120,60,.06));border:1px solid rgba(255,150,70,.5);border-left:4px solid #ff8a3c;border-radius:9px}
+        .release-notice-icon{font-size:18px;line-height:1;flex:none}
+        .release-notice-body{flex:1;margin:0;font-size:12.5px;line-height:1.5;color:#ffe6cb}
+        .release-notice-body b{color:#ffd49a;font-size:13px}
+        .release-notice-link{background:none;border:0;color:#ffd089;font-weight:800;cursor:pointer;font-size:12.5px;text-decoration:underline;padding:0 1px}
         .release-notice-link:hover{color:#fff}
-        .release-notice-x{flex:none;background:none;border:0;color:#caa07a;font-size:16px;cursor:pointer;padding:2px 5px;line-height:1}
+        .release-notice-x{flex:none;background:none;border:0;color:#caa07a;font-size:14px;cursor:pointer;padding:2px 4px;line-height:1}
         .release-notice-x:hover{color:#fff}
         /* タブ */
         .tabs{display:flex;gap:4px;margin:0 0 8px;border-bottom:1px solid #232d44}
@@ -1995,7 +2023,7 @@ export default function ChampionsDamageCalc() {
         .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
         @media(max-width:680px){.grid{grid-template-columns:1fr}}
         /* 攻撃|中央共通|防御 の3カラム。中央にswap/天気/フィールド。パネルはorderで左右入替 */
-        .grid3{display:grid;grid-template-columns:1fr 188px 1fr;gap:14px;align-items:start}
+        .grid3{display:grid;grid-template-columns:1fr 148px 1fr;gap:14px;align-items:start}
         .grid3 > .center-col{order:2}
         @media(max-width:900px){.grid3{grid-template-columns:1fr}}
         .center-col{display:flex;flex-direction:column;gap:10px;align-self:start;padding-top:30px}
@@ -2111,8 +2139,11 @@ export default function ChampionsDamageCalc() {
         .forme-btn{background:#0e1320;border:1px solid #2c3854;border-radius:6px;color:#c4cede;font-size:11px;padding:4px 10px;cursor:pointer}
         .forme-btn:hover{border-color:var(--accent);color:#fff}
         .seg{display:flex;border:1px solid #2c3854;border-radius:7px;overflow:hidden}
-        .seg-btn{background:#0e1320;color:#8fa0bd;border:0;padding:7px 9px;font-size:11px;cursor:pointer}
+        .seg-btn{flex:1;background:#0e1320;color:#8fa0bd;border:0;padding:7px 9px;font-size:11px;cursor:pointer;text-align:center;white-space:nowrap}
         .seg-btn.on{background:#2c3854;color:#fff;font-weight:700}
+        .hd-seg{border-color:#3a5a8a;border-radius:9px}
+        .hd-seg .seg-btn{font-size:13px;padding:8px 18px;color:#9ab8d8}
+        .hd-seg .seg-btn.on{background:var(--brand);color:#fff;font-weight:700}
         select.rank,input.rank{background:#0e1320;border:1px solid #2c3854;border-radius:7px;color:#e8ecf4;padding:7px 8px;font-size:13px;box-sizing:border-box}
         .rank-step{display:flex;align-items:center;gap:4px}
         .rank-step-btn{width:28px;height:32px;flex-shrink:0;border:1px solid #2c3854;background:#1a2336;color:#cfe0ff;border-radius:7px;cursor:pointer;font-size:16px;line-height:1;padding:0}
@@ -2128,22 +2159,25 @@ export default function ChampionsDamageCalc() {
         .result{background:#161d2e;border:1px solid #232d44;border-radius:14px;padding:14px;margin-top:10px;border-top:3px solid var(--accent)}
         /* 画面下部に最前面で常時固定するダメ計結果ドック */
         .result-dock{position:fixed;left:0;right:0;bottom:0;z-index:400;background:#141b2b;border-top:2px solid var(--accent);box-shadow:0 -10px 30px rgba(0,0,0,.55)}
-        .result-dock-inner{box-sizing:border-box;max-width:1500px;margin:0 auto;padding:9px 118px 11px;display:flex;flex-direction:column;gap:5px}
+        .result-dock-inner{box-sizing:border-box;max-width:1500px;margin:0 auto;padding:5px 118px 7px;display:flex;flex-direction:column;gap:3px}
         @media(max-width:1000px){.result-dock-inner{padding-left:16px;padding-right:16px}}
-        .dock-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
-        .dock-head .vs{margin:0;font-size:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-        .dock-toggle{flex-shrink:0;background:#0e1320;border:1px solid #2c3854;border-radius:7px;color:#9fb2d6;font-size:16px;font-weight:700;padding:6px 13px;cursor:pointer;white-space:nowrap}
+        .dock-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+        .dock-head .vs{margin:0;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .dock-toggle{flex-shrink:0;background:#0e1320;border:1px solid #2c3854;border-radius:7px;color:#9fb2d6;font-size:13px;font-weight:700;padding:5px 11px;cursor:pointer;white-space:nowrap}
         .dock-toggle:hover{border-color:var(--brand-border);color:#fff}
         .result-dock .dmg-big{margin:0}
-        .result-dock .hpbar{margin:5px 0 4px}
-        .dock-details{border-bottom:1px solid #232d44;padding-bottom:8px;margin-bottom:4px;max-height:42vh;overflow-y:auto}
+        .result-dock .dmg-num,.result-dock .dmg-pct{font-size:25px}
+        .result-dock .ko{font-size:16px}
+        .result-dock .ko small{font-size:12px}
+        .result-dock .hpbar{margin:2px 0 2px;height:13px}
+        .dock-details{border-bottom:1px solid #232d44;padding-bottom:6px;margin-bottom:3px;max-height:42vh;overflow-y:auto}
         .dock-details .meta-tags{margin-top:0;margin-bottom:8px}
         .dock-details .rolls{margin-top:0}
         .dock-head{flex-wrap:wrap}
         .dock-btns{display:flex;gap:6px;flex-shrink:0;flex-wrap:wrap}
         .dock-add{background:var(--brand-bg);border-color:var(--brand-border);color:#fff}
         .dock-log{border-bottom:1px solid #232d44;padding-bottom:9px;margin-bottom:4px;max-height:40vh;overflow-y:auto}
-        .dock-log-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;color:#c4cede;margin-bottom:7px}
+        .dock-log-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:11px;color:#c4cede;margin-bottom:5px}
         .dock-log-fixed{display:flex;align-items:center;gap:4px;flex-wrap:wrap;font-size:11px;color:#8fa0bd}
         .dock-log-fixed button{background:#0e1320;border:1px solid #2c3854;border-radius:5px;color:#c4cede;font-size:11px;padding:3px 8px;cursor:pointer}
         .dock-log-fixed button:hover{border-color:var(--brand-border);color:#fff}
@@ -2154,8 +2188,8 @@ export default function ChampionsDamageCalc() {
         .dmg-badge{align-self:center;font-size:11px;font-weight:700;color:#cfd8e8;background:var(--brand-bg);border:1px solid var(--brand-border);border-radius:6px;padding:2px 9px}
         .crit-badge{font-size:14px;color:#ffe0a3;background:#5a3414;border-color:#a86d28;letter-spacing:.03em}
         .dock-log-empty{font-size:11px;color:#7c879c;padding:3px 0 2px}
-        .dock-log-list{display:flex;flex-direction:column;gap:3px;margin-bottom:7px}
-        .dock-log-item{display:flex;align-items:center;gap:6px;font-size:12px;color:#d6deec;background:#0e1320;border:1px solid #232d44;border-radius:6px;padding:4px 9px;cursor:pointer}
+        .dock-log-list{display:flex;flex-direction:column;gap:2px;margin-bottom:5px}
+        .dock-log-item{display:flex;align-items:center;gap:5px;font-size:11px;color:#d6deec;background:#0e1320;border:1px solid #232d44;border-radius:6px;padding:3px 8px;cursor:pointer}
         .dock-log-item input[type=checkbox]{margin:0;flex:none}
         .dll-current{border-color:var(--brand-border);background:#10182a}
         .dll-badge{display:inline-block;background:var(--brand-bg);border:1px solid var(--brand-border);color:#cfd8e8;font-size:11px;font-weight:700;border-radius:4px;padding:1px 6px;margin-right:6px}
@@ -2175,8 +2209,8 @@ export default function ChampionsDamageCalc() {
         .dll-dmg{font-variant-numeric:tabular-nums;color:#aeb8c8;flex-shrink:0}
         .dll-x{background:none;border:0;color:#5a6478;font-size:12px;cursor:pointer;padding:0 2px;flex-shrink:0}
         .dll-x:hover{color:#e8504a}
-        .dock-log-sum{font-size:13px;color:#e8ecf4;background:#10182a;border:1px solid var(--brand-border);border-radius:8px;padding:8px 11px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
-        .dock-log-sum b{font-size:15px}
+        .dock-log-sum{font-size:11px;color:#e8ecf4;background:#10182a;border:1px solid var(--brand-border);border-radius:8px;padding:6px 9px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+        .dock-log-sum b{font-size:13px}
         .dock-log-sum .dll-ko{font-weight:800;color:var(--brand)}
         .dll-warn{font-size:11px;color:#d99}
         @media(max-width:600px){.result-dock .dmg-num,.result-dock .dmg-pct{font-size:23px}}
@@ -2264,8 +2298,13 @@ export default function ChampionsDamageCalc() {
         <header className="top">
           <h1>ダメージ計算</h1>
           <span className="sub">ポケモンチャンピオンズ仕様 · Lv50固定 / 個体値31固定 / 能力P制</span>
+          <div style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:10, flexShrink:0 }}>
+            <div className="seg hd-seg" style={{ alignSelf:"center" }}>
+              <button className={!isDouble ? "seg-btn on" : "seg-btn"} onClick={() => setIsDouble(false)}>シングル</button>
+              <button className={isDouble ? "seg-btn on" : "seg-btn"} onClick={() => setIsDouble(true)}>ダブル</button>
+            </div>
           <div className="opts" ref={optsRef}>
-            <button className="gear" onClick={() => setOptsOpen((v) => !v)} aria-label="設定">⚙</button>
+            <button className="gear" style={{ fontSize:18, padding:"7px 11px" }} onClick={() => setOptsOpen((v) => !v)} aria-label="設定">⚙</button>
             {optsOpen && (
               <div className="opts-menu">
                 <div className="opts-item">
@@ -2293,6 +2332,7 @@ export default function ChampionsDamageCalc() {
               </div>
             )}
           </div>
+          </div>
         </header>
         <p className="spec">能力ポイント(SP)は 1ステータス上限32・合計上限66。1SP = 実数値+1。チャンピオンズで習得可能な攻撃技を全収録（{POKEMON.length}匹・{Object.keys(M).length}技）。</p>
 
@@ -2312,6 +2352,7 @@ export default function ChampionsDamageCalc() {
           <button className={view === "obs" ? "tab on" : "tab"} onClick={() => setView("obs")}>🎬 OBS{obs.connected ? " 🟢" : ""}</button>
           <button className={view === "calc" ? "tab on" : "tab"} onClick={() => setView("calc")}>⚔ ダメージ計算</button>
           <button className={view === "team" ? "tab on" : "tab"} onClick={() => setView("team")}>🧩 マイチーム</button>
+          <button className={view === "box" ? "tab on" : "tab"} onClick={() => setView("box")}>📦 ボックス</button>
           <button className={view === "feedback" ? "tab on" : "tab"} onClick={() => setView("feedback")}>💬 フィードバック</button>
         </div>
 
@@ -2320,13 +2361,13 @@ export default function ChampionsDamageCalc() {
         <TeamRail title="🧩 自チーム" side="left"
           controls={
             <div className="rail-team-ctrl">
-              <select className="rail-team-sel" value={myTeams.active} onChange={(e) => myTeams.setActive(Number(e.target.value))}>
-                {myTeams.teams.map((t, i) => <option key={i} value={i}>{(myTeams.names && myTeams.names[i]) || `チーム${i + 1}`}（{t.filter(Boolean).length}）</option>)}
+              <select className="rail-team-sel" value={railActive} onChange={(e) => setRailActive(Number(e.target.value))}>
+                {railTeams.map((t, i) => <option key={i} value={i}>{(railNames && railNames[i]) || `チーム${i + 1}`}（{t.filter(Boolean).length}）</option>)}
               </select>
-              <button className="rail-edit" onClick={() => setView("team")}>登録・編集</button>
+
             </div>
           }
-          groups={myTeams.teams[myTeams.active].filter(Boolean).map(ownRailItems)}
+          groups={railTeams[railActive].filter(Boolean).map(ownRailItems)}
           emptyHint={<><button className="link-btn" style={{ margin: 0 }} onClick={() => setView("team")}>登録</button></>} />
         <div className="calc-main">
         <div className="grid3">
@@ -2367,7 +2408,7 @@ export default function ChampionsDamageCalc() {
                 {!customOn && (
                   <MoveSearch
                     moveList={moveList} value={moveName} onChange={(n) => { setMoveName(n); recordMove(n); }} accent={accent}
-                    chipType={effType} usage={usageMapFor(attacker.name)[moveName]}
+                    chipType={effType} usage={usageMapFor(attacker.name, currentMoveUsage)[moveName]}
                     meta={isFixedMove ? `${move.c} / 固定${fixedDmgVal}ダメージ` : `${move.c} / 威力${effPowerNoItem}${move.ws && weather !== "なし" ? "（天気で変化）" : ""}${isMulti ? ` ×${result.hitLabel}回` : ""}`}
                   />
                 )}
@@ -2418,6 +2459,23 @@ export default function ChampionsDamageCalc() {
                 <TypeChip t={effType} small />
                 <span className="nm">{move.name}</span>
                 <span className="meta">{move.c} / 威力{effPowerNoItem}</span>
+              </div>
+            )}
+            {isDouble && SPREAD_MOVES.has(moveKey) && !customOn && (
+              <div className="cond-row">
+                <span className="cond-note" style={{ color: "#a0c4ff", fontWeight: 600 }}>範囲技 ×0.75</span>
+                <label className="ck">
+                  <input type="checkbox" checked={singleTarget} onChange={(e) => setSingleTarget(e.target.checked)} />
+                  シングルダメージで計算
+                </label>
+              </div>
+            )}
+            {isDouble && effType === "フェアリー" && !customOn && (
+              <div className="cond-row">
+                <label className="ck">
+                  <input type="checkbox" checked={fairyAuraDouble} onChange={(e) => setFairyAuraDouble(e.target.checked)} />
+                  フェアリーオーラ（味方） 威力×1.33
+                </label>
               </div>
             )}
             {SPA_BOOST_MOVES.has(moveName) && !customOn && (
@@ -2527,7 +2585,7 @@ export default function ChampionsDamageCalc() {
                 <span className="field-label">特性</span>
                 <div className="ability-line">
                 <select className="rank" value={atkAbility} onChange={(e) => setAtkAbility(e.target.value)}>
-                  {abilityOptions(attacker).map(({ x, u }) => {
+                  {abilityOptions(attacker, currentAbilityUsage).map(({ x, u }) => {
                     const txt = u != null ? `${x} ${u.toFixed(1)}%` : x;
                     return (
                       <option key={x} value={x} style={DAMAGE_ABILITIES.has(x) ? undefined : { textDecoration: "line-through", color: "#5a6478" }}>
@@ -2653,7 +2711,7 @@ export default function ChampionsDamageCalc() {
               <label className="ck" style={{ opacity: isPhysical ? 1 : 0.4 }}>
                 <input type="checkbox" checked={burn && isPhysical} disabled={!isPhysical} onChange={(e) => setBurn(e.target.checked)} />やけど
               </label>
-              <label className="ck"><input type="checkbox" checked={helpingHand} onChange={(e) => setHelpingHand(e.target.checked)} />てだすけ</label>
+              {isDouble && <label className="ck"><input type="checkbox" checked={helpingHand} onChange={(e) => setHelpingHand(e.target.checked)} />てだすけ</label>}
             </div>
 
             <p className="stat-line">{atkStatLabel}実数値: <b>{result.A}</b>（ランク補正後）</p>
@@ -2676,7 +2734,7 @@ export default function ChampionsDamageCalc() {
                 <span className="field-label">特性</span>
                 <div className="ability-line">
                 <select className="rank" value={defAbility} onChange={(e) => setDefAbility(e.target.value)}>
-                  {abilityOptions(defender).map(({ x, u }) => {
+                  {abilityOptions(defender, currentAbilityUsage).map(({ x, u }) => {
                     const txt = u != null ? `${x} ${u.toFixed(1)}%` : x;
                     return (
                       <option key={x} value={x} style={DAMAGE_ABILITIES.has(x) ? undefined : { textDecoration: "line-through", color: "#5a6478" }}>
@@ -2739,8 +2797,14 @@ export default function ChampionsDamageCalc() {
               </div>
               <label className="ck" style={{ paddingBottom: 8 }}>
                 <input type="checkbox" checked={wall} onChange={(e) => { if (e.target.checked && atkAbilityEff === "すりぬけ") setWarnModal({ kind: "info", title: "すりぬけは壁を無視します", msg: "相手のすりぬけにより、壁（リフレクター／ひかりのかべ）はダメージに影響しません。" }); setWall(e.target.checked); }} />
-                壁（{isPhysical ? "リフレクター" : "ひかりのかべ"}）
+                壁（{isPhysical ? "リフレクター" : "ひかりのかべ"}）{isDouble ? " ×2/3" : ""}
               </label>
+              {isDouble && (
+                <label className="ck" style={{ paddingBottom: 8 }}>
+                  <input type="checkbox" checked={friendGuard} onChange={(e) => setFriendGuard(e.target.checked)} />
+                  フレンドガード
+                </label>
+              )}
             </div>
 
             <p className="stat-line">
@@ -2780,7 +2844,10 @@ export default function ChampionsDamageCalc() {
                   {isMulti && <span className="tag">連続 {result.hitLabel}回{atkAbilityEff === "スキルリンク" ? "（スキルリンク確定）" : result.nHits === 0 ? (moveHits[0] === 2 && moveHits[1] === 5 ? "（確率 35/35/15/15%）" : "（確率）") : ""}</span>}
                   {critEff && <span className="tag">急所 ×1.5</span>}
                   {burn && isPhysical && <span className="tag">やけど ×0.5</span>}
-                  {wallEff && !critEff && <span className="tag">壁 ×0.5</span>}
+                  {wallEff && !critEff && <span className="tag">壁 {isDouble ? "×2/3" : "×0.5"}</span>}
+                  {isSpread && <span className="tag">範囲技 ×0.75</span>}
+                  {isDouble && friendGuard && <span className="tag">フレンドガード ×0.75</span>}
+                  {isDouble && fairyAuraDouble && effType === "フェアリー" && <span className="tag">フェアリーオーラ（味方） ×1.33</span>}
                   {helpingHand && <span className="tag">てだすけ 威力×1.5</span>}
                   {move.bp && <span className="tag">ボディプレス: 自分の防御で計算</span>}
                   {move.lk && <span className="tag">けたぐり/くさむすび: 相手の重さで威力{effPowerNoItem}</span>}
@@ -2788,8 +2855,7 @@ export default function ChampionsDamageCalc() {
                   {terrainNote && <span className="tag">フィールド: {terrainNote}</span>}
                   {condNote && <span className="tag">{move.name}: {condNote}</span>}
                   {atkAbNote && <span className="tag">特性: {atkAbNote}</span>}
-                  {atkAbilityEff !== "なし" && !atkAbNote && <span className="tag">特性: {atkAbilityEff}（この状況では計算に影響なし）</span>}
-                  {defAbilityRaw !== "なし" && <span className="tag" style={moldBreaker ? { textDecoration: "line-through", opacity: 0.7 } : undefined}>相手特性: {defAbilityRaw}{moldBreaker ? "（かたやぶりで無視）" : ""}</span>}
+                  {defAbActive && <span className="tag" style={moldBreaker ? { textDecoration: "line-through", opacity: 0.7 } : undefined}>相手特性: {defAbilityRaw}{moldBreaker ? "（かたやぶりで無視）" : ""}</span>}
                   {atkIE.kind === "typeBoostAny" && <span className="tag">タイプ強化 威力×1.2</span>}
                   {atkIE.kind === "typeBoost" && atkIE.type === effType && <span className="tag">{atkItem} 威力×1.2（{atkIE.type}一致）</span>}
                   {atkIE.kind === "orb" && <span className="tag">いのちのたま ×1.3</span>}
@@ -2816,9 +2882,9 @@ export default function ChampionsDamageCalc() {
                   <span className="dock-log-fixed">固定削り:
                     <span className="dlf-grp">設置
                       <button onClick={() => addFixedToLog(Math.max(1, Math.floor(result.HP * typeEffect("いわ", defTypes) / 8)), "ステロ", "hazard")}>ステロ</button>
-                      <button onClick={() => addFixedToLog(chipGrounded ? Math.floor(result.HP / 8) : 0, "まきびし1", "hazard")} title="1枚=1/8">まき1</button>
-                      <button onClick={() => addFixedToLog(chipGrounded ? Math.floor(result.HP / 6) : 0, "まきびし2", "hazard")} title="2枚=1/6">まき2</button>
-                      <button onClick={() => addFixedToLog(chipGrounded ? Math.floor(result.HP / 4) : 0, "まきびし3", "hazard")} title="3枚=1/4">まき3</button>
+                      <button onClick={() => addFixedToLog(chipGrounded ? Math.floor(result.HP / 8) : 0, "撒菱1", "hazard")} title="1枚=1/8">撒菱1</button>
+                      <button onClick={() => addFixedToLog(chipGrounded ? Math.floor(result.HP / 6) : 0, "撒菱2", "hazard")} title="2枚=1/6">撒菱2</button>
+                      <button onClick={() => addFixedToLog(chipGrounded ? Math.floor(result.HP / 4) : 0, "撒菱3", "hazard")} title="3枚=1/4">撒菱3</button>
                     </span>
                     <span className="dlf-grp">
                       <button className={sandOn ? "dlf-act" : ""} onClick={() => toggleChip(chipSandImmune ? 0 : sandN * Math.floor(result.HP / 16), `砂${sandN}T`, "sand")}>砂</button>
@@ -2924,7 +2990,23 @@ export default function ChampionsDamageCalc() {
           <TeamPanel pokemonData={POKEMON} moveData={M} itemOptions={ALL_ITEMS} hpStat={hpStat} stat={stat}
             onApply={applyMember} atkName={spdOwn.name} defName={spdEnemy.name} accent="var(--brand)" obs={obs}
             previewRef={obsPreviewRef} previewOn={obsPreviewOn} setPreviewOn={setObsPreviewOn} previewMsg={obsPreviewMsg}
-            teams={myTeams.teams} names={myTeams.names} active={myTeams.active} setActive={myTeams.setActive} setMember={myTeams.setMember} setName={myTeams.setName} setTeam={myTeams.setTeam} side={myTeams.side} setSide={myTeams.setSide} />
+            teams={myTeams.teams} names={myTeams.names} active={myTeams.active} setActive={myTeams.setActive} setMember={myTeams.setMember} setName={myTeams.setName} setTeam={myTeams.setTeam}
+            teamsD={myTeams.teamsD} namesD={myTeams.namesD} activeD={myTeams.activeD} setActiveD={myTeams.setActiveD} setMemberD={myTeams.setMemberD} setNameD={myTeams.setNameD} setTeamD={myTeams.setTeamD}
+            side={myTeams.side} setSide={myTeams.setSide}
+            boxS={myTeams.boxS} boxD={myTeams.boxD} addToBoxS={myTeams.addToBoxS} addToBoxD={myTeams.addToBoxD}
+            isDouble={isDouble} />
+        </div>
+        )}
+
+        {view === "box" && (
+        <div className="team-view">
+          <BoxPanel
+            boxS={myTeams.boxS} boxD={myTeams.boxD}
+            addToBoxS={myTeams.addToBoxS} addToBoxD={myTeams.addToBoxD}
+            removeFromBoxS={myTeams.removeFromBoxS} removeFromBoxD={myTeams.removeFromBoxD}
+            updateBoxS={myTeams.updateBoxS} updateBoxD={myTeams.updateBoxD}
+            pokemonData={POKEMON} moveData={M} itemOptions={ALL_ITEMS} hpStat={hpStat} stat={stat}
+            isDouble={isDouble} />
         </div>
         )}
 
@@ -3091,7 +3173,7 @@ export default function ChampionsDamageCalc() {
           計算式: HP = floor((種族値×2+31)×50/100)+60+SP ／ 他 = floor((floor((種族値×2+31)×50/100)+5+SP)×性格)<br />
           ダメージ = floor(22×威力×A÷D÷50)+2 に 天気→急所→乱数(85〜100/100の16段階)→一致→相性→やけど→壁 の順で補正（各段階で切り捨て）。連続技は1ヒットごとに乱数を振って合計。<br />
           ステータス・技データは公式ゲーム『Pokémon Champions』に基づきます。習得技は攻撃技のみ・状況依存技は除く。非公式のファンメイドツールです。<br />
-          技採用率データ: {MOVE_USAGE_META.regulationLabel} ／ {fmtDataTime(MOVE_USAGE_META.updatedAt)}時点（{MOVE_USAGE_META.pokemonCount}匹分）・データ提供: <a href={`https://pkmnchamps.com/ja/stats?regulation=${MOVE_USAGE_META.regulation}&format=${MOVE_USAGE_META.format}&month=${MOVE_USAGE_META.month}`} target="_blank" rel="noopener noreferrer">PkmnChamps</a>
+          技採用率データ: {MOVE_USAGE_META.regulationLabel}・{isDouble ? "ダブル" : "シングル"} ／ {fmtDataTime(MOVE_USAGE_META.updatedAt)}時点（{(isDouble ? Object.keys(MOVE_USAGE_DOUBLES).length : MOVE_USAGE_META.pokemonCount)}匹分）・データ提供: <a href={`https://pkmnchamps.com/ja/stats?regulation=${MOVE_USAGE_META.regulation}&format=${isDouble ? "doubles" : "singles"}&month=${MOVE_USAGE_META.month}`} target="_blank" rel="noopener noreferrer">PkmnChamps</a>
         </footer>
       </div>
     </div>
