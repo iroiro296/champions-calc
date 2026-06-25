@@ -263,7 +263,7 @@ function MemberEditor({ pokemonData, moveData, statusMoves, itemOptions, hpStat,
         {boxForPoke.length > 0 && (
           <div style={{ margin: "3px 0 6px", background: "#0e1b2a", borderRadius: 6, border: "1px solid #1c3048" }}>
             <button onClick={() => setBoxOpen((v) => !v)} style={{ display:"flex", alignItems:"center", gap:6, width:"100%", padding:"6px 8px", background:"none", border:"none", cursor:"pointer", textAlign:"left" }}>
-              <span style={{ fontSize:11.5, fontWeight:700, color:"#9fd0ff" }}>📦 ボックスから選ぶ（{boxForPoke.length}件）</span>
+              <span style={{ fontSize:11.5, fontWeight:700, color:"#9fd0ff" }}>🖥️ ボックスから選ぶ（{boxForPoke.length}件）</span>
               <span style={{ marginLeft:"auto", fontSize:11, color:"#6a8aae" }}>{boxOpen ? "▲" : "▼"}</span>
             </button>
             {boxOpen && (
@@ -902,7 +902,7 @@ export function BoxPanel({ boxS = [], boxD = [], addToBoxS, addToBoxD, removeFro
     <div className="team-manager">
       <div className="team-manager-head">
         <div style={{ display:"flex", alignItems:"center", gap:12, flexWrap:"wrap", marginBottom:6 }}>
-          <h2 style={{ margin:0 }}>📦 ボックス{isDouble ? "（ダブル）" : "（シングル）"}</h2>
+          <h2 style={{ margin:0 }}>🖥️ ボックス{isDouble ? "（ダブル）" : "（シングル）"}</h2>
           <span style={{ fontSize:12, fontVariantNumeric:"tabular-nums", color:"#7c879c" }}>{species.length}種 / {box.length}件</span>
           {pokemonData.length > 0 && (
             <button onClick={() => { closeEditor(); setAddingFor({ name: null }); }}

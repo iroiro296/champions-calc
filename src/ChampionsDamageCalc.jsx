@@ -2352,7 +2352,7 @@ export default function ChampionsDamageCalc() {
           <button className={view === "obs" ? "tab on" : "tab"} onClick={() => setView("obs")}>🎬 OBS{obs.connected ? " 🟢" : ""}</button>
           <button className={view === "calc" ? "tab on" : "tab"} onClick={() => setView("calc")}>⚔ ダメージ計算</button>
           <button className={view === "team" ? "tab on" : "tab"} onClick={() => setView("team")}>🧩 マイチーム</button>
-          <button className={view === "box" ? "tab on" : "tab"} onClick={() => setView("box")}>📦 ボックス</button>
+          <button className={view === "box" ? "tab on" : "tab"} onClick={() => setView("box")}>🖥️ ボックス</button>
           <button className={view === "feedback" ? "tab on" : "tab"} onClick={() => setView("feedback")}>💬 フィードバック</button>
         </div>
 
@@ -2795,6 +2795,8 @@ export default function ChampionsDamageCalc() {
                 <span className="field-label">ランク</span>
                 <RankSelect value={defRank} onChange={setDefRank} />
               </div>
+            </div>
+            <div className="row">
               <label className="ck" style={{ paddingBottom: 8 }}>
                 <input type="checkbox" checked={wall} onChange={(e) => { if (e.target.checked && atkAbilityEff === "すりぬけ") setWarnModal({ kind: "info", title: "すりぬけは壁を無視します", msg: "相手のすりぬけにより、壁（リフレクター／ひかりのかべ）はダメージに影響しません。" }); setWall(e.target.checked); }} />
                 壁（{isPhysical ? "リフレクター" : "ひかりのかべ"}）{isDouble ? " ×2/3" : ""}
