@@ -988,9 +988,9 @@ export default function ChampionsDamageCalc() {
     // 別ポケを選んだ時は防御側のSP/性格/ランク/壁/もちものも既定に戻す
     setHpSp(0); setBSp(0); setDSp(0); setBNature(1.0); setDNature(1.0); setDefRank(0); setWall(false); setDefItem("その他");
   }, [defIdx]);
-  // メガシンカは持ち物を持てない＝選んだら持ち物を「なし」に強制
-  useEffect(() => { if (isMega(attacker)) setAtkItem("なし"); }, [atkIdx]);
-  useEffect(() => { if (isMega(defender)) setDefItem("なし"); }, [defIdx]);
+  // メガシンカは持ち物を持てない＝選んだら「その他」に強制（メガストーンはポケモン名で識別するため「なし」ではなく「その他」）
+  useEffect(() => { if (isMega(attacker)) setAtkItem("その他"); }, [atkIdx]);
+  useEffect(() => { if (isMega(defender)) setDefItem("その他"); }, [defIdx]);
 
   // マイチームのメンバーをこうげき側へ反映（技カテゴリで攻撃ステ・性格補正を選択）
   function applyMemberToAttacker(m) {
@@ -1340,7 +1340,9 @@ export default function ChampionsDamageCalc() {
   const noWeather = ["ノーてんき", "エアロック"].includes(atkAbilityEff) || ["ノーてんき", "エアロック"].includes(defAbilityRaw);
 
   // 自動判定特性の発動状況（チェックボックス表示用）
-  const atkAbActive = atkAbNote !== "";
+  // かたいツメは接触技にのみ効果を発揮するが、非接触/特殊技選択中でも「常にON(警告でオフ可)」として扱う。
+  // こうしないと非接触技選択中はcheckboxがdisabledになり、ユーザーが効果未発動と誤認しかつオフにもできない。
+  const atkAbActive = atkAbNote !== "" || atkAbilityEff === "かたいツメ";
   const defAbActive = (() => {
     const a = defAbilityRaw; // 表示は防御側の実特性ベース（かたやぶりで無視されていても発動状況は出す）
     if (a === "なし") return false;
@@ -2666,7 +2668,7 @@ export default function ChampionsDamageCalc() {
             <div className="row">
               <div className="field">
                 <span className="field-label">もちもの{isMega(attacker) ? "（メガ＝不可）" : ""}</span>
-                <select className="rank" value={isMega(attacker) ? "なし" : atkItem} disabled={isMega(attacker)} onChange={(e) => setAtkItem(e.target.value)}>
+                <select className="rank" value={isMega(attacker) ? "その他" : atkItem} disabled={isMega(attacker)} onChange={(e) => setAtkItem(e.target.value)}>
                   {/* 登録した実物の持ち物（汎用リストに無いもの）を なし の上に表示。攻撃に効かなければ(影響なし) */}
                   {!ATK_ITEMS.includes(atkItem) && <option value={atkItem}>{itemLabel(atkItem, "atk")}</option>}
                   {/* でんきだまはピカチュウの時だけ選択肢に出す（選択中なら不一致防止で出す） */}
@@ -2767,7 +2769,7 @@ export default function ChampionsDamageCalc() {
             <div className="row">
               <div className="field">
                 <span className="field-label">もちもの{isMega(defender) ? "（メガ＝不可）" : ""}</span>
-                <select className="rank" value={isMega(defender) ? "なし" : defItem} disabled={isMega(defender)} onChange={(e) => setDefItem(e.target.value)}>
+                <select className="rank" value={isMega(defender) ? "その他" : defItem} disabled={isMega(defender)} onChange={(e) => setDefItem(e.target.value)}>
                   {/* 登録した実物の持ち物を なし の上に表示。防御に効かなければ(影響なし) */}
                   {!DEF_ITEMS.includes(defItem) && <option value={defItem}>{itemLabel(defItem, "def")}</option>}
                   {DEF_ITEMS.map((x) => <option key={x} value={x}>{x}</option>)}
