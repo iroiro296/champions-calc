@@ -13,7 +13,13 @@ const STAT_KEYS = ["h", "a", "b", "c", "d", "s"];
 const BAR_X0 = 1644, BAR_X1 = 1792, BAR_FULL_PX = 142, SP_MAX = 32;
 const ARROW_X0 = 1512, ARROW_X1 = 1562;
 const isOrange = (r, g, b) => r > 175 && g > 85 && g < 190 && b < 120 && (r - b) > 95 && (r - g) > 25;
-const isUp     = (r, g, b) => r > 150 && g < 118 && (r - g) > 70 && (r - b) > 40;
+// SP=1の極細フィル(幅≈4px)は彩度の落ちた暖色(rgb≈170,125,115)で描画され、強いisOrangeを通らない＝0読みになる。
+// これはバー左端18px内のスリバー救済専用の緩い判定。空バーの寒色(rgb≈49,54,98 / b>r)は確実に除外する。
+const isWarmFill = (r, g, b) => r > 120 && (r - b) > 30 && (r - g) > 20;
+// 性格上昇(▲▲)の矢印は純赤ではなく「ローズ/ピンク」(例 rgb(158,62,93)/(133,75,93)/(147,54,78))で描画される。
+// 旧条件(r>150 & g<118 & r-g>70 & r-b>40)はこの淡い赤を殆ど弾き、概要ステ画面の小さな▲で検出漏れ(画素3個)していた。
+// 緩めて「赤が支配的(r>120, r-g>45, r>b, gは低め)」で拾う。b>25でオレンジSPバー(b≈0でisUp条件に合致)を確実に除外。
+const isUp     = (r, g, b) => r > 120 && (r - g) > 45 && r > b && g < 130 && b > 25;
 const isDown   = (r, g, b) => g > 135 && b > 155 && (g - r) > 45 && (b - r) > 55;
 
 // ---- 技/特性 行レイアウト ----
@@ -273,7 +279,14 @@ export function scanStatScreen(src, dicts, tpl) {
   STAT_ROWS.forEach((yc, i) => {
     let xr = -1;
     for (let x = BAR_X1; x >= BAR_X0; x--) { let hit = false; for (let y = yc - 9; y <= yc + 9; y++) { const [r, g, b] = at(x, y); if (isOrange(r, g, b)) { hit = true; break; } } if (hit) { xr = x; break; } }
-    sp[STAT_KEYS[i]] = xr < 0 ? 0 : Math.max(0, Math.min(SP_MAX, Math.round((xr - BAR_X0) / BAR_FULL_PX * SP_MAX)));
+    if (xr >= 0) sp[STAT_KEYS[i]] = Math.max(0, Math.min(SP_MAX, Math.round((xr - BAR_X0) / BAR_FULL_PX * SP_MAX)));
+    else {
+      // 強orangeが全く無い＝SP0(空) または SP1の極細スリバー(彩度の落ちた暖色)。
+      // バー左端18px内で暖色フィルを探し、2列以上連続すれば本物のスリバー＝SP1+として救済(1pxノイズは無視)。
+      let cols = 0, rx = -1;
+      for (let x = BAR_X0; x <= BAR_X0 + 18; x++) { let hit = false; for (let y = yc - 9; y <= yc + 9; y++) { const [r, g, b] = at(x, y); if (isWarmFill(r, g, b)) { hit = true; break; } } if (hit) { cols++; rx = x; } }
+      sp[STAT_KEYS[i]] = cols >= 2 ? Math.max(1, Math.round((rx - BAR_X0) / BAR_FULL_PX * SP_MAX)) : 0;
+    }
     let up = 0, dn = 0;
     for (let y = yc - 17; y <= yc + 13; y++) for (let x = ARROW_X0; x <= ARROW_X1; x++) { const [r, g, b] = at(x, y); if (isUp(r, g, b)) up++; if (isDown(r, g, b)) dn++; }
     if (up > 6) nature.plus = STAT_KEYS[i];
@@ -306,17 +319,52 @@ export function scanStatScreen(src, dicts, tpl) {
 const OV = { colX: 800, rowY: 218, nameY0: 297 };
 // 画面ごとの縦ズレ自動補正。コーディネート(編成)画面=ズレ0 / ランクマッチ画面は全体が≈+20px下にズレる（同じ画面に見えて微妙に違う）。
 // 読み取り枠(bboxOf)は±26pxと広いので、ズレたまま読むと隣の行の文字が枠に入って化ける→各読みをdyだけ下げて枠を本来の文字に合わせ直す。
-// dy検出: 各セル上部の「ポケモン名(白文字)」の縦重心を実測し、基準nameY0とのズレを返す。名前は能力/ステータス両タブに在り、白文字で位置がくっきり＝OCR不要で速く確実。
-// 実測検証: 編成画面でズレ≈+1〜4px(描画誤差)、+20pxシフトで+20を正確に検出。小さなズレ(<6px)は0に丸めて従来動く画面の挙動を変えない。
+// 検出は二段階:
+//   1. 技列(x677..930)で最大白画素ランを探す（能力タブ用）
+//      明るいキャプチャ(HDR等): カードボーダー(密度>150px/行)が最大ランになる→ボーダーモード
+//      通常キャプチャ: Move[0]テキスト(密度≤150)が最大ラン→テキストモード
+//      ニックネーム対応: 技列はニックネームと無関係。
+//   2. 技列に有効ランが無い場合（ステータスタブ等）は名前エリア(x265..460)にフォールバック。
+//      名前エリアの重心計算はOCRではなく画素重心のみ→ニックネームの文字種・文字数に非依存。
 function ovNameDy(d) {
+  const isW2 = (px, py) => { const o = (py * 1920 + px) * 4; return d[o] > 205 && d[o + 1] > 205 && d[o + 2] > 205 && (Math.max(d[o], d[o + 1], d[o + 2]) - Math.min(d[o], d[o + 1], d[o + 2])) < 42; };
+  // ---- 段階1: 技列(x677..930)からdyを検出 ----
+  // ステータスタブでは実数値の数字(y≈by+45から始まる)が技列(x740..802等)に重なるため、
+  // 数字の上端がby±40窓に染み込んでdy=36等の誤検出になる。dy>25は「実数値テキストの誤検出」と判定し棄却。
+  // 有効なdyの実測値は 0(コーディネート) / 19-20(ランクマッチ) のみ。
+  for (let r = 0; r < 3; r++) for (let c = 0; c < 2; c++) {
+    const X = c * OV.colX, xa = 677 + X, xb = 930 + X;
+    const by = OV.nameY0 + r * OV.rowY + 3; // dy=0でのMove[0]理論Y
+    const SEARCH = 40;
+    const rc = [];
+    for (let py = by - SEARCH; py <= by + SEARCH; py++) { let w = 0; for (let px = xa; px <= xb; px++) if (isW2(px, py)) w++; rc.push(w); }
+    let bestSum = 0, bestA = -1, bestB = -1, rs = -1, rsum = 0;
+    for (let i = 0; i <= rc.length; i++) { const on = i < rc.length && rc[i] >= 2; if (on) { if (rs < 0) { rs = i; rsum = 0; } rsum += rc[i]; } else if (rs >= 0) { if (rsum > bestSum) { bestSum = rsum; bestA = rs; bestB = i - 1; } rs = -1; } }
+    if (bestA < 0 || bestB - bestA < 2) continue; // 3行未満ランは誤検出
+    let sum = 0, cnt = 0;
+    for (let i = bestA; i <= bestB; i++) { sum += (by - SEARCH + i) * rc[i]; cnt += rc[i]; }
+    if (cnt < 20) continue;
+    const centerY = Math.round(sum / cnt);
+    const density = bestSum / (bestB - bestA + 1); // 1行あたりの白画素数
+    // 密度>150=カードボーダー(明るいキャプチャ)。dy=0でのボーダー重心=by-40(実測)
+    // 密度≤150=Move[0]テキスト(通常キャプチャ)。dy=0でのテキスト中心=by
+    const dy = density > 150 ? centerY - (by - 40) : centerY - by;
+    if (Math.abs(dy) > 25) continue; // 大きすぎるdyは実数値テキストの誤検出 → 次セルへ
+    return Math.abs(dy) < 6 ? 0 : dy;
+  }
+  // ---- 段階2: 技列で検出できない場合は名前エリア(x265..460)にフォールバック ----
+  // ステータスタブでは技列エリアにUIパネルが重なり検出不可のため名前エリアを使う。
+  // 重心計算なのでニックネームでも位置ズレは起きない(文字内容を読んでいない)。
+  // 検索上限をby+25に絞る: by+45(実数値1行目)より手前で打ち切り、実数値テキストの重心汚染を防ぐ。
+  // ランクマッチのname位置(by+20)は窓内に収まる。
   const isW = (px, py) => { const o = (py * 1920 + px) * 4; return d[o] > 200 && d[o + 1] > 200 && d[o + 2] > 200 && (Math.max(d[o], d[o + 1], d[o + 2]) - Math.min(d[o], d[o + 1], d[o + 2])) < 40; };
   for (let r = 0; r < 3; r++) for (let c = 0; c < 2; c++) {
-    const X = c * OV.colX, xa = 265 + X, xb = 460 + X, by = OV.nameY0 + r * OV.rowY; // x265-460=名前テキストのみ(性別/タイプアイコンはx480~で色付き＝白フィルタに乗らない)
+    const X = c * OV.colX, xa = 265 + X, xb = 460 + X, by = OV.nameY0 + r * OV.rowY;
     let sum = 0, cnt = 0, rows = 0;
-    for (let py = by - 40; py <= by + 40; py++) { let w = 0; for (let px = xa; px <= xb; px++) if (isW(px, py)) w++; if (w >= 4) { sum += py * w; cnt += w; rows++; } } // 白が多い行の重み付き重心＝名前の縦中心
-    if (cnt >= 80 && rows >= 8) { const dy = Math.round(sum / cnt - by); return Math.abs(dy) < 6 ? 0 : dy; } // 最初の非空セルで確定
+    for (let py = by - 40; py <= by + 32; py++) { let w = 0; for (let px = xa; px <= xb; px++) if (isW(px, py)) w++; if (w >= 4) { sum += py * w; cnt += w; rows++; } }
+    if (cnt >= 80 && rows >= 8) { const dy = Math.round(sum / cnt - by); return Math.abs(dy) < 6 ? 0 : dy; }
   }
-  return 0; // 名前が見つからない(全空 等)＝補正なし
+  return 0;
 }
 // セル(col 0/1, row 0/1/2)の基準 = nameY0 + row*rowY, x += col*colX。各フィールドの相対オフセット。
 export function scanTeamOverviewAbility(src, dicts) {
@@ -326,7 +374,7 @@ export function scanTeamOverviewAbility(src, dicts) {
   dicts = dicts || {};
   const kana = dicts.kana || loadKana().kana;
   const moveCands = dicts.moves || [], moveIllegal = dicts.movesIllegal || [], abilCands = dicts.abilities || [], itemCands = dicts.items || [];
-  const OVPP = { wlo: 18, whi: 24, plo: 17, phi: 26, tail: 16, ps: 2.2, olo: 10, ohi: 3, thr: 205, soft: 90 }; // 概要は文字~19-22px/char。thr:205で右下の半透明スロット番号(明度≤188)を除外。soft:90=小さい文字の描画ブレを許容(2位との大差ガードは据置で誤検出は増やさない)
+  const OVPP = { wlo: 18, whi: 24, plo: 17, phi: 26, tail: 16, ps: 2.2, olo: 10, ohi: 3, thr: 205, soft: 100 }; // 概要は文字~19-22px/char。thr:205で右下の半透明スロット番号(明度≤188)を除外。soft:100=明るいHDRキャプチャで描画ブレが増える環境にも対応(2位との大差ガードは据置で誤検出は増やさない)
   const OVPP_ITEM = { ...OVPP, gap: 7, margin: 1.12 }; // 持ち物は「○○のみ」等が密集し小文字だと2位が近い。シュカのみ(53.6)vsリュガのみ(62.8)等の正解を弾かないよう差/比のガードを緩める(候補は実物セットで誤りは登録後に目視訂正できる)
   // 1フィールドを読む。微調整付き＝全体dy補正後も残る「名前重心とフィールドの較正差(≈1-4px)」やサブピクセル残差で
   // 境界ぎりぎりの語(みずのはどう等)が落ちるので、yc を ±数px 振って最初に通った所を採る。
@@ -345,13 +393,15 @@ export function scanTeamOverviewAbility(src, dicts) {
   const readCell = (r, c, dy) => {
     const baseY = OV.nameY0 + r * OV.rowY + dy, X = c * OV.colX;
     const ability = tryRead(baseY + 50, 285 + X, 625 + X, abilCands, OVPP).name; // 左フィールドは技列(x~665〜)の手前まで
-    const item = tryRead(baseY + 95, 270 + X, 625 + X, itemCands, OVPP_ITEM).name; // アイコン(左)を避け x270から、技列手前まで
+    const itemRes = tryRead(baseY + 95, 270 + X, 625 + X, itemCands, OVPP_ITEM); // アイコン(左)を避け x270から、技列手前まで
+    const item = itemRes.name;
+    const itemBlank = !item && !itemRes.cells; // 持ち物欄に白文字が一切無い＝「持ち物なし」。テキストはあるが照合失敗(cellsあり)＝不明、とは区別する
     const moves = []; const unknownMoves = [];
     [3, 50, 95, 138].forEach((off, i) => {
       const m = tryRead(baseY + off, 677 + X, 930 + X, moveCands, OVPP, moveIllegal); // 技テキストは x~682 から。x677起点で1字目を欠けず拾う（タイプアイコンはx672までで色付き＝thr205/低彩度フィルタに乗らない）
       if (m.name) moves.push(m.name); else if (m.cells) unknownMoves.push(i);
     });
-    return { slot: r * 2 + c, ability: ability || null, item: item || null, moves, undetMoves: unknownMoves.length, undetMoveIdx: unknownMoves }; // undetMoveIdx=検出失敗した技の元スロット番号(0-3)＝表示で順番通りに「検出失敗」を出す用
+    return { slot: r * 2 + c, ability: ability || null, item: item || null, itemBlank, moves, undetMoves: unknownMoves.length, undetMoveIdx: unknownMoves }; // undetMoveIdx=検出失敗した技の元スロット番号(0-3)＝表示で順番通りに「検出失敗」を出す用。itemBlank=持ち物欄が空(なし)
   };
   const dy = ovNameDy(d); // 画面ズレを名前の縦位置から検出（コーディネート=0 / ランクマッチ≈+20）
   const cells = [];
@@ -396,15 +446,23 @@ export function scanTeamOverviewStatus(src) {
   const readCell = (r, c, dy) => {
     const baseY = OV.nameY0 + r * OV.rowY + dy, X = c * OV.colX;
     const stats = {}, sp = {}, nature = { plus: null, minus: null };
+    const upS = {}, dnS = {}; // 各ステの▲(赤)/▼(青)画素数。即断せず全ステ集計後にペアで確定する
+    // 性格矢印(▲▲赤/▼▼青)はラベルと実数値の間に出る。塊判定はせず素直に画素数で数える。
+    const arrowScore = (xa, xb, yc, key) => { let up = 0, dn = 0; for (let py = yc - 14; py <= yc + 12; py++) for (let px = xa; px <= xb; px++) { const [rr, gg, bb] = at(px, py); if (isUp(rr, gg, bb)) up++; if (isDown(rr, gg, bb)) dn++; } upS[key] = up; dnS[key] = dn; };
     [45, 90, 135].forEach((off, j) => {
       const yc = baseY + off, kL = KL[j], kR = KR[j];
       stats[kL] = readNumber(d, yc, 388 + X, 458 + X); sp[kL] = readNumber(d, yc, 478 + X, 542 + X); // 左SPは2桁(32等)が右端x536まで伸びる＝旧532では「2」が切れて37等に化けた→542まで拾う(次列アイコンはx570)
       stats[kR] = readNumber(d, yc, 740 + X, 802 + X); sp[kR] = readNumber(d, yc, 844 + X, 904 + X);
-      // 性格矢印(▲▲赤/▼▼青)はラベルと実数値の間に出る。塊判定はせず素直に画素数で見る(jpgで赤▲が褪せると弱くなる＝検出漏れ側が問題なので感度優先。取込はpng化で赤▲も鮮明)
-      const arrow = (xa, xb, key) => { let up = 0, dn = 0; for (let py = yc - 14; py <= yc + 12; py++) for (let px = xa; px <= xb; px++) { const [rr, gg, bb] = at(px, py); if (isUp(rr, gg, bb)) up++; if (isDown(rr, gg, bb)) dn++; } if (up > 4) nature.plus = key; if (dn > 4) nature.minus = key; };
-      if (kL !== "h") arrow(348 + X, 388 + X, kL); // HPは性格対象外。アイコン(更に左)は外す
-      arrow(692 + X, 740 + X, kR);
+      if (kL !== "h") arrowScore(348 + X, 388 + X, yc, kL); // HPは性格対象外。アイコン(更に左)は外す
+      arrowScore(692 + X, 740 + X, yc, kR);
     });
+    // 性格補正の確定: ▲最大ステ=上昇 / ▼最大ステ=下降。
+    // 仕様上「上昇だけ/下降だけ」は絶対に無い(必ずペア or 無補正)。よって一方でも明確(>TH)なら性格補正あり＝両方確定。
+    // 弱く出た側もargmaxで相方として救済するが、ノイズ誤割当を防ぐためFLOOR超のみ採用。両方ともTH以下なら無補正(まじめ等)。
+    const TH = 5, FLOOR = 2;
+    const argmax = (S) => { let bk = null, bv = -1; for (const k in S) if (S[k] > bv) { bv = S[k]; bk = k; } return { k: bk, v: bv }; };
+    const up = argmax(upS), dn = argmax(dnS);
+    if (up.v > TH || dn.v > TH) { if (up.v > FLOOR) nature.plus = up.k; if (dn.v > FLOOR) nature.minus = dn.k; }
     return { slot: r * 2 + c, stats, sp, nature }; // stats/sp は {h,a,b,c,d,s}
   };
   const dy = ovNameDy(d); // 画面ズレを名前の縦位置から検出（能力タブと共通。名前は両タブに在る）

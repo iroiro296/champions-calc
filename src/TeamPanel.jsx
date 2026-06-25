@@ -413,9 +413,12 @@ function guessPokemon(pokemonData, moves, ability, stats, nature, hpStat, stat, 
   return (baseForms.length ? baseForms : ties)[0].name;
 }
 
-// 実数値(OCR)から努力値(SP)を逆算する。Champions は Lv50・個体値31固定で「1SP = 実数値+1」なので各ステで一致するSP(0..32)を総当たり。
-// numSp=true(概要画面): SPが数字で直読みできる→実数値の誤読を「SP数値」と相互照合して訂正する（例: 攻撃189を180と誤読しても、SP数値32が示す実数値≈読んだ値なら32を採用）。
-// numSp無し(ステ画面): SPはオレンジバー読みで不確かなので、従来どおり実数値の逆算を優先しバー読みはフォールバックのみ。
+// 実数値(OCR)・SPバー・性格補正・種族値計算式を照合してSPを確定する。
+// numSp=true(概要画面): SP数値が直読みできるので最優先。
+// numSp無し(ステ画面): 全SP(0..32)をスキャンし「OCR実数値との差＋バー読みとの距離」の合算コスト最小のSPを採用。
+//   実数値OCRが±1誤読してもバー読みが正しい側へ引き戻す（バーはSP=1スリバーまで読める＝信頼度が高い）。
+//   採用SPの計算値がOCRと±2超に乖離したらOCR異常としてバー読みを採る。タイは更にバーに近い方を優先。
+// 最後にSP総量≤66の制約を適用。超過した分はバー読みとの差(≒誤差)が最大の推定から削る。
 function spFromStats(base, stats, nature, barSp, hpStat, stat, numSp) {
   const KEYS = ["h", "a", "b", "c", "d", "s"];
   const natMul = (k) => (nature && nature.plus === k ? 1.1 : nature && nature.minus === k ? 0.9 : 1.0);
@@ -424,16 +427,30 @@ function spFromStats(base, stats, nature, barSp, hpStat, stat, numSp) {
   KEYS.forEach((k, i) => {
     const real = stats ? stats[i] : null;
     const sNum = barSp && barSp[k] != null ? barSp[k] : null;
-    let found = null; // 実数値に完全一致するSP
-    if (real != null && base) { for (let s = 0; s <= 32; s++) { if (expOf(k, s) === real) { found = s; break; } } }
-    // 概要画面はSPが数字で直読みできる＝最も確実。妥当(0..32)ならSP数値を最優先で採用（実数値は逆算より誤読しやすい3桁＝同定用に留め、SP決定には使わない）。
-    // SP数値が読めない/範囲外の時だけ、実数値の逆算→バー読みにフォールバック。
-    if (numSp && sNum != null && sNum >= 0 && sNum <= 32) {
-      out[k] = sNum;
-    } else {
-      out[k] = found != null ? found : ((barSp && barSp[k]) || 0);
+    // 概要画面はSPが数字で直読みできる＝最も確実。
+    if (numSp && sNum != null && sNum >= 0 && sNum <= 32) { out[k] = sNum; return; }
+    // 種族値なし → バー読みのみ
+    if (!base) { out[k] = sNum != null ? sNum : 0; return; }
+    const bar = Math.max(0, Math.min(32, sNum != null ? sNum : 0));
+    if (real == null) { out[k] = bar; return; }
+    // 全SP(0..32)をスキャン: 「計算値とOCR実数値の差」＋「バー読みとの距離」の合算コストが最小のSPを選ぶ。
+    // バーをタイ崩しでなくコスト自体に含めるのが肝。OCR実数値が±1誤読(151→150・121→122等)でも、
+    // バー読みが正しいSP側へ引き戻す（バーはSP=1のスリバーまで読めるので信頼度が高い）。タイは更にバーに近い方を優先。
+    let bestSp = bar, bestCost = Infinity;
+    for (let s = 0; s <= 32; s++) {
+      const cost = Math.abs(expOf(k, s) - real) + Math.abs(s - bar);
+      if (cost < bestCost || (cost === bestCost && Math.abs(s - bar) < Math.abs(bestSp - bar))) { bestCost = cost; bestSp = s; }
     }
+    out[k] = Math.abs(expOf(k, bestSp) - real) <= 2 ? bestSp : bar; // 採用SPの計算値がOCRと±2以内なら採用。それ以上の乖離はOCR異常＝バー読みへ
   });
+  // SP総量66制約: 超過分はバー読みとの差(≒誤差の大きい推定値)から削る
+  const barOf = (k) => Math.max(0, Math.min(32, barSp && barSp[k] != null ? barSp[k] : 0));
+  let tot = KEYS.reduce((s, k) => s + (out[k] || 0), 0);
+  if (tot > 66) {
+    const ord = KEYS.slice().sort((a, b) => Math.abs((out[b] || 0) - barOf(b)) - Math.abs((out[a] || 0) - barOf(a)));
+    let ex = tot - 66;
+    for (const k of ord) { if (ex <= 0) break; const c = Math.min(out[k] || 0, ex); out[k] = (out[k] || 0) - c; ex -= c; }
+  }
   return out;
 }
 
@@ -636,7 +653,7 @@ export function TeamPanel({ pokemonData, moveData, itemOptions, hpStat, stat, on
       let ability = a.ability;
       if (matched && ability && !(matched.abilities || []).includes(ability)) ability = matched.abilities?.[0] || ability;
       if (!ability) ability = matched?.abilities?.[0] || "";
-      const item = a.item || "その他"; // OCRで読んだ実名のまま登録（メガ石も「○○ナイト」で個別識別）。読めなければ不明＝その他
+      const item = a.item || (a.itemBlank ? "なし" : "その他"); // OCR実名優先（メガ石も「○○ナイト」で個別識別）。欄が空＝持ち物なし→「なし」、テキスト有で読めず＝不明→「その他」
       setMember(active, slot, { name, nature: s.nature || { plus: null, minus: null }, sp, item, ability, moves: (a.moves || []).slice(0, 4), undetMoves: a.undetMoves || 0, undetMoveIdx: a.undetMoveIdx || [], abRead: !!ab, stRead: !!st }); // どのタブを取り込んだか＝未取込側のフィールドは表示で「未登録」に
       count++;
     }
@@ -751,7 +768,7 @@ export function TeamPanel({ pokemonData, moveData, itemOptions, hpStat, stat, on
         {/* チーム一括スキャン（概要画面の 能力タブ＋ステータスタブ から6匹） */}
         <div style={{ border: "1px solid #2c4a6a", borderRadius: 8, padding: "8px 10px", marginBottom: 8, background: "#0f1b2e" }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: "#aee0ff", marginBottom: 5 }}>🚀 チーム一括スキャン（6匹まとめて）</div>
-          <div style={{ fontSize: 11, opacity: 0.72, marginBottom: 7, lineHeight: 1.4 }}>編成の「能力」「ステータス」画面を取り込んで6匹を登録（両方で完成）。読めない技は✎で補完。</div>
+          <div style={{ fontSize: 11, opacity: 0.72, marginBottom: 7, lineHeight: 1.4 }}>「バトルチームの情報」の「能力」「ステータス」画面をそれぞれ取り込んでチームを一括登録。</div>
           {[["ability", "①能力タブ", ovAb], ["status", "②ステータスタブ", ovSt]].map(([tab, label, done]) => (
             <div key={tab} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
               <span style={{ fontSize: 12.5, fontWeight: 600, width: 110, flexShrink: 0, color: done ? "#8fe6a0" : "#cdd8ec" }} title={done ? "取込済み" : ""}>{done ? "✓ " : ""}{label}</span>
@@ -785,6 +802,9 @@ export function TeamPanel({ pokemonData, moveData, itemOptions, hpStat, stat, on
         </div>
         </div>
         <div className="tm-members">
+        <div style={{ fontSize: 12.5, color: "#9aa6bd", lineHeight: 1.5, marginBottom: 6 }}>
+          空欄の「📸 取込」でOBSから1匹ずつ登録。もちものの読み取りには未対応のため、ダメ計に影響するもの（タイプ強化・いのちのたま等）は ✎ で手動入力してください。
+        </div>
         <MemberHeader />
         <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 5 }}>
           {teams[active].map((m, slot) => (
