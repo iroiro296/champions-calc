@@ -19,6 +19,9 @@ const abilityUsageFor = (name, src = ABILITY_USAGE) => src[name] || src[FORM_USA
 // ダメ計には出ない（固定ダメージ/一撃必殺/カウンター系で計算式に乗らない）が、ゲームでは使える実在技。
 // どのポケが覚えるかは excludedLearnset.js（Champions learnset由来）。この集合は ILLEGAL_SET に入っていても🚫表示しないための判定に使う。
 const CALC_EXCLUDED_SET = new Set(Object.values(EXCLUDED_LEARNSET).flat());
+// 検出失敗技をポケモンの技に絞って再照合する時の採用上限(平均ハミング)。候補は当該ポケの技だけ＝正解が必ず含まれるので、
+// 全技照合のsoft(78)より少し緩めて、明るいキャプチャで上振れた正解(例ぼうふう≈61)も拾う。これ超は不一致として検出失敗のまま残す。
+const MOVE_NARROW_CUTOFF = 80;
 
 /* マイチーム登録（3チーム×6匹）。各メンバーはフル構成（性格・SP配分H/A/B/C/D/S・もちもの・特性・技最大4）を保持。
    クリックで onApply(member) を呼び、親がこうげき側へ反映（技カテゴリで攻撃SPと性格補正を選ぶ）。localStorage永続化。 */
@@ -638,6 +641,29 @@ export function TeamPanel({ pokemonData, moveData, itemOptions, hpStat, stat, on
     const dyMsg = dy ? `（位置ズレ ${dy > 0 ? "+" : ""}${dy}px を自動補正）` : ""; // ランクマッチ画面など縦ズレを補正したら知らせる
     setOvMsg(`${lbl}タブ取込 → ${count}匹に${part}を登録${both ? "（両タブ反映で完了）" : "（もう片方のタブも取り込むと残りも反映）"}${dyMsg}`);
   }
+  // 検出失敗技を、同定したポケモンの技(learnset)に絞って1文字セルで再照合し復元する。
+  // 全技照合(readByDict)は2位との差ガードが厳しく、明るいキャプチャ等でbestAvgが上振れると惜しい正解（例:ぼうふう）を落とす。
+  // 候補をそのポケの技だけに絞れば字数差でほぼ一意になり、特性のmatchAbilityCellsと同じ理屈で救済できる。戻り値=スロット順の{moves[], undetIdx[]}。
+  const recoverMovesByLearnset = (a, matched) => {
+    const matchedMoves = a.moves || [], failIdx = a.undetMoveIdx || [], cells = a.undetMoveCells || [];
+    if (!matched || !cells.length) return { moves: matchedMoves.slice(0, 4), undetIdx: failIdx }; // 失敗セルが無い/ポケ未特定は従来通り
+    const kana = loadKana().kana;
+    const learnCands = (matched.learnset || []).filter((mv) => moveData[mv] || STATUS_MOVES[mv]);
+    const total = matchedMoves.length + failIdx.length;
+    const slotArr = new Array(total).fill(null); // スロット順に技を復元（失敗枠はnull）
+    let mi = 0;
+    for (let i = 0; i < total; i++) { if (failIdx.includes(i)) continue; slotArr[i] = matchedMoves[mi++]; }
+    const cellByIdx = new Map(cells.map((x) => [x.idx, x.cells]));
+    const stillFail = [];
+    for (const idx of failIdx) {
+      const cl = cellByIdx.get(idx);
+      const cand = cl ? learnCands.filter((mv) => [...mv].length === cl.length) : []; // 同字数のそのポケの技だけ
+      const m = (cl && cand.length) ? matchAbilityCells(cl, cand, kana) : null;
+      if (m && m.avg <= MOVE_NARROW_CUTOFF && !slotArr.includes(m.name)) slotArr[idx] = m.name; // 重複技は登録しない
+      else stillFail.push(idx);
+    }
+    return { moves: slotArr.filter(Boolean).slice(0, 4), undetIdx: stillFail };
+  };
   // ab/st のうち読めている方だけで登録（片方nullでもOK）。空きスロットは飛ばす。
   function applyOverview(ab, st) {
     if (!ab && !st) return 0;
@@ -647,14 +673,18 @@ export function TeamPanel({ pokemonData, moveData, itemOptions, hpStat, stat, on
       const statsArr = st ? KEYS.map((k) => s.stats?.[k] ?? null) : null;
       const nRead = statsArr ? statsArr.filter((v) => v != null).length : 0;
       if (!((a.moves && a.moves.length) || a.ability || nRead >= 3)) continue; // 空きスロットは飛ばす
-      const name = guessPokemon(pokemonData, a.moves || [], a.ability, statsArr, s.nature, hpStat, stat, s.sp) || pokemonData[0].name;
+      const guessed = guessPokemon(pokemonData, a.moves || [], a.ability, statsArr, s.nature, hpStat, stat, s.sp); // 確信ありなら名前・無ければnull
+      const name = guessed || pokemonData[0].name;
       const matched = pokemonData.find((p) => p.name === name);
       const sp = spFromStats(matched?.base, statsArr, s.nature, s.sp, hpStat, stat, true); // 概要画面はSP数値直読み→相互照合で実数値の誤読を訂正
       let ability = a.ability;
       if (matched && ability && !(matched.abilities || []).includes(ability)) ability = matched.abilities?.[0] || ability;
       if (!ability) ability = matched?.abilities?.[0] || "";
-      const item = a.item || (a.itemBlank ? "なし" : "その他"); // OCR実名優先（メガ石も「○○ナイト」で個別識別）。欄が空＝持ち物なし→「なし」、テキスト有で読めず＝不明→「その他」
-      setMember(active, slot, { name, nature: s.nature || { plus: null, minus: null }, sp, item, ability, moves: (a.moves || []).slice(0, 4), undetMoves: a.undetMoves || 0, undetMoveIdx: a.undetMoveIdx || [], abRead: !!ab, stRead: !!st }); // どのタブを取り込んだか＝未取込側のフィールドは表示で「未登録」に
+      const item = a.item || (a.itemBlank ? "なし" : "その他"); // OCR実名優先（メガ石も「○○ナイト」で個別識別）。欄が空＝持ち物なし→「不明」、テキスト有で読めず＝不明→「その他」
+      // 検出失敗した技を「そのポケモンの技」に絞って再照合＝特性と同じ救済（全技照合では2位との差ガードで惜しくも落ちた技を拾う）。
+      // ※確信を持って同定できた時(guessed)だけ。未同定(先頭ポケで仮埋め)では誤った技を注入しかねないので救済しない。
+      const rec = recoverMovesByLearnset(a, guessed ? matched : null);
+      setMember(active, slot, { name, nature: s.nature || { plus: null, minus: null }, sp, item, ability, moves: rec.moves, undetMoves: rec.undetIdx.length, undetMoveIdx: rec.undetIdx, abRead: !!ab, stRead: !!st }); // どのタブを取り込んだか＝未取込側のフィールドは表示で「未登録」に
       count++;
     }
     return count;

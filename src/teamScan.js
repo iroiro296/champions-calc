@@ -396,12 +396,12 @@ export function scanTeamOverviewAbility(src, dicts) {
     const itemRes = tryRead(baseY + 95, 270 + X, 625 + X, itemCands, OVPP_ITEM); // アイコン(左)を避け x270から、技列手前まで
     const item = itemRes.name;
     const itemBlank = !item && !itemRes.cells; // 持ち物欄に白文字が一切無い＝「持ち物なし」。テキストはあるが照合失敗(cellsあり)＝不明、とは区別する
-    const moves = []; const unknownMoves = [];
+    const moves = []; const unknownMoves = []; const unknownMoveCells = [];
     [3, 50, 95, 138].forEach((off, i) => {
       const m = tryRead(baseY + off, 677 + X, 930 + X, moveCands, OVPP, moveIllegal); // 技テキストは x~682 から。x677起点で1字目を欠けず拾う（タイプアイコンはx672までで色付き＝thr205/低彩度フィルタに乗らない）
-      if (m.name) moves.push(m.name); else if (m.cells) unknownMoves.push(i);
+      if (m.name) moves.push(m.name); else if (m.cells) { unknownMoves.push(i); unknownMoveCells.push({ idx: i, cells: m.cells }); } // cellsは呼び側でポケモンの技に絞って再照合する用
     });
-    return { slot: r * 2 + c, ability: ability || null, item: item || null, itemBlank, moves, undetMoves: unknownMoves.length, undetMoveIdx: unknownMoves }; // undetMoveIdx=検出失敗した技の元スロット番号(0-3)＝表示で順番通りに「検出失敗」を出す用。itemBlank=持ち物欄が空(なし)
+    return { slot: r * 2 + c, ability: ability || null, item: item || null, itemBlank, moves, undetMoves: unknownMoves.length, undetMoveIdx: unknownMoves, undetMoveCells: unknownMoveCells }; // undetMoveIdx=検出失敗した技の元スロット番号(0-3)＝表示で順番通りに「検出失敗」を出す用。undetMoveCells=失敗技の1文字セル(学習セット絞り込み再照合用)。itemBlank=持ち物欄が空(なし)
   };
   const dy = ovNameDy(d); // 画面ズレを名前の縦位置から検出（コーディネート=0 / ランクマッチ≈+20）
   const cells = [];

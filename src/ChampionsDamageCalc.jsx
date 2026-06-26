@@ -804,6 +804,8 @@ function SpeedCompare({ ownName, ownBaseS, ownMember, enemyName, enemyBaseS, sta
   const mod = (base, rank, scarf, para, boost) => { let s = Math.floor(base * stageMul(rank)); if (scarf) s = Math.floor(s * 1.5); if (boost) s = Math.floor(s * 2); if (para) s = Math.floor(s * 0.5); return s; };
   const ownFinal = spd === "" ? null : mod(Number(spd) || 0, oRank, oScarf, oPara, oBoost); // 空欄なら判定しない
   const pats = [["最速", stat(enemyBaseS, 32, 1.1)], ["準速", stat(enemyBaseS, 32, 1.0)], ["無振り", stat(enemyBaseS, 0, 1.0)], ["最遅", stat(enemyBaseS, 0, 0.9)]];
+  // 自分の実数値が未入力の時は、相手と同様に最速/準速/無振り/最遅の参考値を出す（種族値から算出）
+  const ownPats = [["最速", stat(ownBaseS, 32, 1.1)], ["準速", stat(ownBaseS, 32, 1.0)], ["無振り", stat(ownBaseS, 0, 1.0)], ["最遅", stat(ownBaseS, 0, 0.9)]];
   return (
     <div className="modal-backdrop modal-top" {...dismissOnBackdrop(onClose)}>
       <section className="result modal spd-modal" onClick={(e) => e.stopPropagation()}>
@@ -811,10 +813,21 @@ function SpeedCompare({ ownName, ownBaseS, ownMember, enemyName, enemyBaseS, sta
         <p className="vs" style={{ marginBottom: 10 }}><b>⚡ すばやさ比較</b>　補正をかけた素早さ実数値で、自分が相手の各振り方を抜けるか判定します</p>
         <div className="spd-cols">
           <div className="spd-side">
-            <div className="spd-side-head">自分: {ownName}<span className="spd-src">{regSpd != null ? "（登録値）" : "（未登録：実数値を入力）"}</span></div>
+            <div className="spd-side-head">自分: {ownName}<span className="spd-src">{regSpd != null ? "（登録値）" : "（未登録：実数値を入力 / 各振り方は下に表示）"}</span></div>
             <label className="spd-row"><span>実数値</span><input type="number" value={spd} onChange={(e) => setSpd(e.target.value)} /></label>
             <SpdMods rank={oRank} setRank={setORank} scarf={oScarf} setScarf={setOScarf} para={oPara} setPara={setOPara} boost={oBoost} setBoost={setOBoost} />
-            <div className="spd-final">最終 <b>{ownFinal == null ? "—" : ownFinal}</b></div>
+            {spd === "" ? (
+              <div className="spd-pats">
+                {ownPats.map(([lbl, base]) => (
+                  <div className="spd-pat" key={lbl}>
+                    <span className="spd-pat-l">{lbl}</span>
+                    <span className="spd-pat-v">{mod(base, oRank, oScarf, oPara, oBoost)}</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="spd-final">最終 <b>{ownFinal}</b></div>
+            )}
           </div>
           <div className="spd-side">
             <div className="spd-side-head">相手: {enemyName}</div>
@@ -964,7 +977,9 @@ export default function ChampionsDamageCalc() {
   // すばやさ比較ツール用: ダメ計の左側=自ポケ・右側=相手（攻守交代しても左右は固定）。左ポケが登録済みならその実数値(SP/性格)を使う
   const spdOwn = atkOnRight ? defender : attacker;   // 左パネルのポケ＝自分
   const spdEnemy = atkOnRight ? attacker : defender; // 右パネルのポケ＝相手
-  const ownMember = (railTeams[railActive] || []).find((m) => m && m.name === spdOwn.name) || null;
+  // メガ進化中(spdOwn=「○○(メガ)」)はチームにベース名で登録されているのでベース名でも引く。ownBaseSはメガ後種族値(spdOwn.base.s)が渡るので、登録SP/性格×メガ種族値で実数値が出る
+  const spdOwnBase = spdOwn.name.replace(/\(メガ[XY]?\)$/, "");
+  const ownMember = (railTeams[railActive] || []).find((m) => m && (m.name === spdOwn.name || m.name === spdOwnBase)) || null;
 
   // ポケモン変更時: 「影響あり特性の中で採用率が最大」を自動選択（影響なし特性は除く）、発動はオフに戻す
   const defaultAbility = (p) => {
@@ -973,6 +988,9 @@ export default function ChampionsDamageCalc() {
     const list = p.abilities || [];
     return byUsage(list.filter((a) => DAMAGE_ABILITIES.has(a))) ?? byUsage(list) ?? "なし";
   };
+  // 登録メンバーの特性を反映する時の確定値。登録特性がそのポケの特性リストに無い（メガ適用でベース特性が残る等）なら既定特性へフォールバック。
+  // これでマイチーム経由でもリスト選択と同様「常にそのポケの正しい特性」になり、特性チェックボックス等のUIが一致値前提で動く。
+  const memberAbility = (poke, ability) => ((poke.abilities || []).includes(ability) ? ability : defaultAbility(poke));
   const applyingMemberRef = useRef(false); // マイチーム適用中は特性の自動リセットを抑止
   useEffect(() => {
     if (applyingMemberRef.current) { applyingMemberRef.current = false; return; }
@@ -1004,11 +1022,11 @@ export default function ChampionsDamageCalc() {
     if (idx !== atkIdx) applyingMemberRef.current = true; // 特性の自動リセットを1回だけ抑止
     setAtkIdx(idx);
     if (mv) setMoveName(mv);
-    if (attackMoves.length) setMoveHist((prev) => ({ ...prev, [m.name]: attackMoves.slice(0, 8) })); // 覚えている攻撃技を全部「最近使った技」に表示
+    if (attackMoves.length) setCurMoveHist((prev) => ({ ...prev, [m.name]: attackMoves.slice(0, 8) })); // 覚えている攻撃技を全部「最近使った技」に表示（現モードの履歴へ）
     setAtkSp(m.sp?.[offStat] ?? 0);
     setAtkNature(natureMul);
     setAtkItem(m.item || "その他"); // 実物の持ち物名のまま反映（攻撃に効かない物は欄で(影響なし)表示）
-    setAtkAbility(m.ability || defaultAbility(poke));
+    setAtkAbility(memberAbility(poke, m.ability)); // メガ適用時はベース特性ではなくメガ形態の特性へ補正
     setAtkAbilityOn(false);
   }
 
@@ -1026,7 +1044,7 @@ export default function ChampionsDamageCalc() {
     setBNature(nat("b"));
     setDNature(nat("d"));
     setDefItem(m.item || "その他"); // 実物の持ち物名のまま反映（防御に効かない物は欄で(影響なし)表示）
-    setDefAbility(m.ability || defaultAbility(poke));
+    setDefAbility(memberAbility(poke, m.ability)); // メガ適用時はベース特性ではなくメガ形態の特性へ補正
     setDefAbilityOn(false);
   }
 
@@ -1138,8 +1156,13 @@ export default function ChampionsDamageCalc() {
     if (!moveList.find((m) => m.name === moveName)) setMoveName(moveList[0]?.name ?? "");
   }, [moveList]);
 
-  const [moveHist, setMoveHist] = useState(() => { try { return JSON.parse(localStorage.getItem("championsMoveHist")) || {}; } catch { return {}; } }); // 技の履歴は対戦・再読込を跨いでずっと保持
+  const [moveHist, setMoveHist] = useState(() => { try { return JSON.parse(localStorage.getItem("championsMoveHist")) || {}; } catch { return {}; } }); // 技の履歴は対戦・再読込を跨いでずっと保持（シングル）
   useEffect(() => { try { localStorage.setItem("championsMoveHist", JSON.stringify(moveHist)); } catch {} }, [moveHist]);
+  const [moveHistD, setMoveHistD] = useState(() => { try { return JSON.parse(localStorage.getItem("championsMoveHistD")) || {}; } catch { return {}; } }); // ダブル専用の技履歴（シングルと完全分離）
+  useEffect(() => { try { localStorage.setItem("championsMoveHistD", JSON.stringify(moveHistD)); } catch {} }, [moveHistD]);
+  // シングル/ダブルで技履歴を切り分け（前モードで使った技が別モードの既定として出るのを防ぐ）
+  const curMoveHist = isDouble ? moveHistD : moveHist;
+  const setCurMoveHist = isDouble ? setMoveHistD : setMoveHist;
 
   // 最近選択したポケモンの履歴（攻撃側・防御側それぞれ最新順8匹）
   const [atkPokeHist, setAtkPokeHist] = useState([]);
@@ -1258,7 +1281,7 @@ export default function ChampionsDamageCalc() {
     if (ABILITY_SKIN[ab] && move.t === "ノーマル") { effType = ABILITY_SKIN[ab]; effPower = f(effPower * 1.2); atkAbNote = `${ab}: ${effType}化×1.2`; }
     if (ab === "うるおいボイス" && SOUND_MOVES.has(moveKey)) { effType = "みず"; atkAbNote = "うるおいボイス: 音技をみず化"; }
     if (ABILITY_PINCH[ab] && effType === ABILITY_PINCH[ab]) { effPower = f(effPower * 1.5); atkAbNote = `${ab} 威力×1.5`; }
-    if (ab === "てきおうりょく") { stabMul = 2; atkAbNote = "てきおうりょく: 一致×2"; }
+    if (ab === "てきおうりょく" && atkTypes.includes(effType)) { stabMul = 2; atkAbNote = "てきおうりょく: 一致×2"; } // タイプ一致技のみ効果（不一致技では発動チェックもオフ＝オンにできない）
     if ((ab === "ちからもち" || ab === "ヨガパワー") && isPhysicalMove) { aAbilityMul *= 2; atkAbNote = `${ab}: 攻撃×2`; }
     if (ab === "はりきり" && isPhysicalMove) { aAbilityMul *= 1.5; atkAbNote = "はりきり: 攻撃×1.5"; }
     if (ab === "こんじょう" && isPhysicalMove) { aAbilityMul *= 1.5; ignoreBurn = true; atkAbNote = "こんじょう: 攻撃×1.5・やけど無効"; }
@@ -1273,7 +1296,7 @@ export default function ChampionsDamageCalc() {
     if (ab === "すいほう" && effType === "みず") { effPower = f(effPower * 2); atkAbNote = "すいほう 威力×2"; }
     if (ab === "もらいび" && effType === "ほのお") { effPower = f(effPower * 1.5); atkAbNote = "もらいび: ほのお技×1.5"; } // 攻撃側もらいび状態
     if (ab === "ぎたい" && terrainEff !== "なし") atkAbNote = `ぎたい: ${TERRAIN_TO_TYPE[terrainEff]}タイプに変化`;
-    if (ab === "かたいツメ" && contact) { effPower = f(effPower * 1.3); atkAbNote = "かたいツメ: 接触技 威力×1.3"; }
+    if (ab === "かたいツメ" && contact) { effPower = f(effPower * 1.3); atkAbNote = "かたいツメ: 直接攻撃 威力×1.3"; }
     if (ab === "きれあじ" && SLICING_MOVES.has(moveKey)) { effPower = f(effPower * 1.5); atkAbNote = "きれあじ: 切る技 威力×1.5"; }
     if (ab === "ほのおのたてがみ" && effType === "ほのお") { effPower = f(effPower * 1.5); atkAbNote = "ほのおのたてがみ: ほのお技 威力×1.5"; }
     if (ab === "でんきにかえる" && effType === "でんき") { effPower = f(effPower * 2); atkAbNote = "でんきにかえる: 充電 でんき技×2"; }
@@ -1340,9 +1363,7 @@ export default function ChampionsDamageCalc() {
   const noWeather = ["ノーてんき", "エアロック"].includes(atkAbilityEff) || ["ノーてんき", "エアロック"].includes(defAbilityRaw);
 
   // 自動判定特性の発動状況（チェックボックス表示用）
-  // かたいツメは接触技にのみ効果を発揮するが、非接触/特殊技選択中でも「常にON(警告でオフ可)」として扱う。
-  // こうしないと非接触技選択中はcheckboxがdisabledになり、ユーザーが効果未発動と誤認しかつオフにもできない。
-  const atkAbActive = atkAbNote !== "" || atkAbilityEff === "かたいツメ";
+  const atkAbActive = atkAbNote !== "";
   const defAbActive = (() => {
     const a = defAbilityRaw; // 表示は防御側の実特性ベース（かたやぶりで無視されていても発動状況は出す）
     if (a === "なし") return false;
@@ -1558,16 +1579,17 @@ export default function ChampionsDamageCalc() {
   }, [curHpPct, healItem, attacker, defender, move, effType, effPower, isPhysical, isMulti, atkSp, atkNature, atkRank, crit, burn, helpingHand, defRank, wall, weather, critEff, lightBall, defItem, atkAbilityEff, defAbilityEff, stabMul, aAbilityMul, ignoreBurn, protean, proteanType, noWeather, isDouble, singleTarget, friendGuard, fairyAuraDouble]);
 
 
-  // ポケモン切替時: 最後に使った技を復元
+  // ポケモン切替・モード切替時: 常にそのモードの採用率1位の技を既定選択（moveListはcurrentMoveUsageでソート済み）。
+  // 履歴では上書きしない＝同じポケでも必ず最有力技を表示。過去に使った技は「最近使った技」チップから手動で選べる。
+  // isDoubleを依存に含めることでシングル⇔ダブル切替時も各モードの1位に切り替わる＝完全分離。
   useEffect(() => {
-    const hist = moveHist[attacker.name];
-    if (hist?.[0] && attacker.learnset.includes(hist[0])) setMoveName(hist[0]);
-  }, [atkIdx]);
+    setMoveName(moveList[0]?.name ?? "");
+  }, [atkIdx, isDouble]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // 技を履歴に記録：ユーザーが明示的に選んだ時だけ呼ぶ。デフォで自動選択された技は記録しない＝変更しても履歴に残らない。
+  // 技を履歴に記録：ユーザーが明示的に選んだ時だけ呼ぶ。デフォで自動選択された技は記録しない＝変更しても履歴に残らない。現モードの履歴へ。
   const recordMove = (name) => {
     if (!attacker.learnset.includes(name)) return;
-    setMoveHist((prev) => {
+    setCurMoveHist((prev) => {
       const hist = prev[attacker.name] ?? [];
       if (hist[0] === name) return prev;
       return { ...prev, [attacker.name]: [name, ...hist.filter((n) => n !== name)].slice(0, 8) };
@@ -1575,11 +1597,11 @@ export default function ChampionsDamageCalc() {
   };
 
   const removeRecent = (name) => {
-    setMoveHist((prev) => ({ ...prev, [attacker.name]: (prev[attacker.name] ?? []).filter((n) => n !== name) }));
+    setCurMoveHist((prev) => ({ ...prev, [attacker.name]: (prev[attacker.name] ?? []).filter((n) => n !== name) }));
   };
 
   // 最近使った技（最新順）。下の全技一覧は従来通りすべて表示する
-  const recentMoves = (moveHist[attacker.name] ?? []).filter((n) => moveList.some((m) => m.name === n));
+  const recentMoves = (curMoveHist[attacker.name] ?? []).filter((n) => moveList.some((m) => m.name === n));
 
   // ===== 合算ログ: 複数のダメージ源を足してワンパン可否を計算（ステロ＋技 / 2体分 / 2ターン分など） =====
   const addToLog = () => {
