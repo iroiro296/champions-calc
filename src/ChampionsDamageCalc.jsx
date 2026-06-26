@@ -1832,16 +1832,17 @@ export default function ChampionsDamageCalc() {
   // メガシンカ・フォルムチェンジ: 同名ベースのメガ体/元の姿の選択肢を返す
   const formeOptions = (idx) => {
     const name = POKEMON[idx].name;
-    const isMega = name.includes("メガ");
+    // 「(メガ」で判定（部分一致だと"メガニウム"等メガで始まる名前を誤ってメガ扱いし、ボタン欠落やlabelのnull.matchでクラッシュする）
+    const isMega = name.includes("(メガ");
     const base = name.replace(/\(.*\)$/, "");
     const opts = POKEMON
       .map((p, i) => ({ name: p.name, i }))
       .filter(({ name: n, i }) =>
-        i !== idx && (isMega ? n === base : n.startsWith(base + "(") && n.includes("メガ"))
+        i !== idx && (isMega ? n === base : n.startsWith(base + "(") && n.includes("(メガ"))
       )
       .map(({ name: n, i }) => ({
         i,
-        label: n.includes("メガ") ? n.match(/\((.*)\)/)[1] + "へ" : "元の姿に戻す",
+        label: n.includes("(メガ") ? n.match(/\((.*)\)/)[1] + "へ" : "元の姿に戻す",
       }));
     // イルカマン/ギルガルド等のフォルムチェンジ（メガ以外。双方向）
     const sib = FORM_SIBLING[name];

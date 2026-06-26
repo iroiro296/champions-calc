@@ -19,9 +19,9 @@ const abilityUsageFor = (name, src = ABILITY_USAGE) => src[name] || src[FORM_USA
 // ダメ計には出ない（固定ダメージ/一撃必殺/カウンター系で計算式に乗らない）が、ゲームでは使える実在技。
 // どのポケが覚えるかは excludedLearnset.js（Champions learnset由来）。この集合は ILLEGAL_SET に入っていても🚫表示しないための判定に使う。
 const CALC_EXCLUDED_SET = new Set(Object.values(EXCLUDED_LEARNSET).flat());
-// 検出失敗技をポケモンの技に絞って再照合する時の採用上限(平均ハミング)。候補は当該ポケの技だけ＝正解が必ず含まれるので、
-// 全技照合のsoft(78)より少し緩めて、明るいキャプチャで上振れた正解(例ぼうふう≈61)も拾う。これ超は不一致として検出失敗のまま残す。
-const MOVE_NARROW_CUTOFF = 80;
+// 検出失敗技をポケモンの技に絞って再照合する時のbackstop上限(平均ハミング)。採用は主に「2位との大差(マージン)」で判定し、
+// これは「無関係な技(状態技等が攻撃learnsetに無理やり当たる)」を弾く保険。明るいキャプチャは正解でもavgが上振れる(ぼうふう83)ので緩め。
+const MOVE_NARROW_CAP = 115;
 
 /* マイチーム登録（3チーム×6匹）。各メンバーはフル構成（性格・SP配分H/A/B/C/D/S・もちもの・特性・技最大4）を保持。
    クリックで onApply(member) を呼び、親がこうげき側へ反映（技カテゴリで攻撃SPと性格補正を選ぶ）。localStorage永続化。 */
@@ -658,8 +658,16 @@ export function TeamPanel({ pokemonData, moveData, itemOptions, hpStat, stat, on
     for (const idx of failIdx) {
       const cl = cellByIdx.get(idx);
       const cand = cl ? learnCands.filter((mv) => [...mv].length === cl.length) : []; // 同字数のそのポケの技だけ
-      const m = (cl && cand.length) ? matchAbilityCells(cl, cand, kana) : null;
-      if (m && m.avg <= MOVE_NARROW_CUTOFF && !slotArr.includes(m.name)) slotArr[idx] = m.name; // 重複技は登録しない
+      // そのポケの同字数技を全採点し、1位が2位に明確勝ち(候補が少ない＝正解は大差で勝つ)なら採用。
+      // 絶対avgではなくマージン主体＝明るいキャプチャでavgが上振れ(ぼうふう83)しても拾える。capはforced誤り防止のbackstop。
+      let best = null, secAvg = Infinity;
+      for (const mv of cand) {
+        const r = matchAbilityCells(cl, [mv], kana); if (!r) continue;
+        if (!best || r.avg < best.avg) { if (best) secAvg = Math.min(secAvg, best.avg); best = { name: mv, avg: r.avg }; }
+        else secAvg = Math.min(secAvg, r.avg);
+      }
+      const clear = best && (secAvg - best.avg >= 18 || secAvg >= best.avg * 1.3); // 差18以上 か 比1.3以上で「明確勝ち」
+      if (best && best.avg <= MOVE_NARROW_CAP && clear && !slotArr.includes(best.name)) slotArr[idx] = best.name; // 重複技は登録しない
       else stillFail.push(idx);
     }
     return { moves: slotArr.filter(Boolean).slice(0, 4), undetIdx: stillFail };

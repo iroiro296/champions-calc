@@ -147,12 +147,25 @@ function cellsRowBatch(combos, L, y0, y1, thresh = 150) {
   return out;
 }
 
+// テキスト領域のグレースケールからOtsu法で2値化しきい値を自動算出（明るさ不変化）。
+// 固定150だと明るいキャプチャ(背景が持ち上がる)で白文字の線が太りハミングが膨らむ→暗/明どちらでも最適な閾値に自動追従する。
+// テンプレは暗めキャプチャを~150で焼いた物だが、暗いキャプチャではOtsuも~150付近に落ちる(ヒストグラムの谷)ので再ベイク不要。実測: 明るいキャプチャでOtsu≈184=ハミング最適と一致。
+function otsuThresh(d, b) {
+  const hist = new Uint32Array(256); let n = 0, sum = 0;
+  for (let y = b.y0; y <= b.y1; y++) for (let x = b.x0; x <= b.x1; x++) { const o = (y * 1920 + x) * 4; const g = (d[o] + d[o + 1] + d[o + 2]) / 3 | 0; hist[g]++; n++; }
+  for (let i = 0; i < 256; i++) sum += i * hist[i];
+  let wB = 0, sumB = 0, maxVar = -1, thr = 150;
+  for (let t = 0; t < 256; t++) { wB += hist[t]; if (!wB) continue; const wF = n - wB; if (!wF) break; sumB += t * hist[t]; const mB = sumB / wB, mF = (sum - sumB) / wF; const v = wB * wF * (mB - mF) * (mB - mF); if (v > maxVar) { maxVar = v; thr = t; } }
+  return thr;
+}
+
 // 候補名(辞書)から最も合う名前を返す。ゲームの技/特性フォントはプロポーショナル(1字送りが≈24.6〜27pxで揺れる)
 // ため、固定ピッチだと長い名前ほどセルが字からズレる。実テキスト幅から候補文字数ごとに送りを推定し、原点・送りを
 // 微調整して最良アラインメントで照合する。信頼度(平均ハミング)＋2位との差で足切り。
 function readByDict(d, yc, xa, xb, candidates, kana, pp) {
   pp = pp || { wlo: 21.5, whi: 28.5, plo: 20, phi: 30, tail: 18 }; // 1字送り/ピッチの想定（既定=ステ画面の大きめ文字。概要画面は小さめなので呼び側で渡す）
   const b = bboxOf(d, yc, xa, xb, pp.thr || 185); if (!b) return { name: null, cells: null }; // pp.thr=高明度で透かし番号を除外（概要画面用）
+  const cthr = pp.adaptiveThresh ? otsuThresh(d, b) : 150; // セル2値化しきい値: 概要は領域Otsuで明るさ不変。既定(ステ画面等)は従来の固定150
   const W = b.x1 - b.x0 + 1;
   const dch = (cell, ch) => { const ts = kana[ch]; if (!ts || !ts.length) return null; let mn = 1e9; for (const t of ts) { const h = hammingK(cell, t); if (h < mn) mn = h; } return mn; };
   // テキスト幅から妥当な文字数だけ試す（実測の1字送りは≈24〜26pxなので、末尾字幅も込みで W/L≈21.5〜28.5 に収まる長さのみ）
@@ -168,7 +181,7 @@ function readByDict(d, yc, xa, xb, candidates, kana, pp) {
       for (let delta = -ps; delta <= ps + 1e-9; delta += 0.4) combos.push({ origin, pitch: Math.max(pp.plo, Math.min(pp.phi, center + delta)) });
     // 中央(原点≈bbox左端・送り≈推定値)に近い順に並べる＝最良アラインメントを早く見つけて以降の早期打ち切りを効かせる（結果は順序非依存で不変）。
     combos.sort((p, q) => (Math.abs(p.origin - b.x0) + Math.abs(p.pitch - center)) - (Math.abs(q.origin - b.x0) + Math.abs(q.pitch - center)));
-    const allCells = cellsRowBatch(combos, L, b.y0, b.y1); // 原点×送り全候補を1回のreadbackでまとめてマスク化
+    const allCells = cellsRowBatch(combos, L, b.y0, b.y1, cthr); // 原点×送り全候補を1回のreadbackでまとめてマスク化（cthr=適応2値化しきい値）
     const lenCandsA = lenCands.map((c) => [...c]); // 文字配列を事前展開（combo毎の再spreadを避ける）
     for (let ci = 0; ci < combos.length; ci++) {
       const cells = allCells[ci];
@@ -188,8 +201,11 @@ function readByDict(d, yc, xa, xb, candidates, kana, pp) {
   let secAvg = 1e9; for (const [c, av] of candAvg) if (c !== bestName && av < secAvg) secAvg = av; // 2位は別候補の最良平均
   // 概要画面は文字が小さく描画ブレが大きいので pp.soft で大差勝ち許容上限を引き上げ可。差/比のガードも pp.gap/pp.margin で緩められる
   // （持ち物は「○○のみ」等で似た候補が密集し、小さい文字だと2位が近くなり正解まで弾かれる→持ち物読みだけ緩める。技は誤検出を避け据置）。
-  const soft = pp.soft || KANA_AVG_SOFT, gapMin = pp.gap || KANA_GAP_MIN, margin = pp.margin || KANA_MARGIN;
-  const accept = bestAvg <= KANA_AVG_CLEAN || (bestAvg <= soft && (secAvg - bestAvg) >= gapMin && secAvg >= bestAvg * margin);
+  const soft = pp.soft || KANA_AVG_SOFT, gapMin = pp.gap || KANA_GAP_MIN, margin = pp.margin || KANA_MARGIN, bigGap = pp.bigGap || Infinity;
+  // 採用: クリーン無条件 / soft内で「最低差(gapMin)」を満たし、かつ「比(margin)が十分 か 絶対差が大きい(bigGap)」。
+  // 明るいキャプチャはavgが上振れし比が圧縮される(つるぎのまい110 vs 145=比1.32)が、絶対差35は十分→bigGapで救済。比ガードを下げず誤検出を増やさない。
+  const gap = secAvg - bestAvg;
+  const accept = bestAvg <= KANA_AVG_CLEAN || (bestAvg <= soft && gap >= gapMin && (secAvg >= bestAvg * margin || gap >= bigGap));
   return { name: accept ? bestName : null, cells: bestCells, conf: +bestAvg.toFixed(1) };
 }
 
@@ -374,7 +390,7 @@ export function scanTeamOverviewAbility(src, dicts) {
   dicts = dicts || {};
   const kana = dicts.kana || loadKana().kana;
   const moveCands = dicts.moves || [], moveIllegal = dicts.movesIllegal || [], abilCands = dicts.abilities || [], itemCands = dicts.items || [];
-  const OVPP = { wlo: 18, whi: 24, plo: 17, phi: 26, tail: 16, ps: 2.2, olo: 10, ohi: 3, thr: 205, soft: 100 }; // 概要は文字~19-22px/char。thr:205で右下の半透明スロット番号(明度≤188)を除外。soft:100=明るいHDRキャプチャで描画ブレが増える環境にも対応(2位との大差ガードは据置で誤検出は増やさない)
+  const OVPP = { wlo: 18, whi: 24, plo: 17, phi: 26, tail: 16, ps: 2.2, olo: 10, ohi: 3, thr: 205, soft: 125, bigGap: 30, adaptiveThresh: true }; // 概要は文字~19-22px/char。thr:205で右下の半透明スロット番号(明度≤188)を除外。adaptiveThresh=セル2値化を領域Otsuで明るさ不変化(明るいキャプチャでのハミング上振れを根治)。soft:125/bigGap:30は適応化後も残す保険(2位との大差ガードは維持で誤検出は増やさない)
   const OVPP_ITEM = { ...OVPP, gap: 7, margin: 1.12 }; // 持ち物は「○○のみ」等が密集し小文字だと2位が近い。シュカのみ(53.6)vsリュガのみ(62.8)等の正解を弾かないよう差/比のガードを緩める(候補は実物セットで誤りは登録後に目視訂正できる)
   // 1フィールドを読む。微調整付き＝全体dy補正後も残る「名前重心とフィールドの較正差(≈1-4px)」やサブピクセル残差で
   // 境界ぎりぎりの語(みずのはどう等)が落ちるので、yc を ±数px 振って最初に通った所を採る。
