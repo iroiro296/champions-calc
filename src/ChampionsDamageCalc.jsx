@@ -220,6 +220,8 @@ const ABILITY_SKIN = { フェアリースキン: "フェアリー", スカイス
 // 発動チェックで計算上の天気をセット。あめふらし等は「天気を作る」、すなのちから/すなはきは「対応天気にして効果発動」
 // サンパワーはここに入れない＝自動特性化。はれの時だけ自動発動（atkAbNoteが付く＝atkAbActive）、他天気/無しで自動オフ、はれ中にオフしようとすると確認モーダル。効果は下のweather==="はれ"判定で乗る
 const WEATHER_ABILITY = { あめふらし: "あめ", ひでり: "はれ", すなおこし: "すなあらし", ゆきふらし: "ゆき", すなのちから: "すなあらし", すなはき: "すなあらし" };
+// 登場時に天気を「作る」特性だけ（すなのちから/すなはきは天気を作らないので除く）。選択した時点で天気欄を自動でその天気にするのに使う
+const WEATHER_SETTER = { あめふらし: "あめ", ひでり: "はれ", すなおこし: "すなあらし", ゆきふらし: "ゆき" };
 // てんきや（ポワルン）: 天気でタイプが変わる（すなあらし/なしはノーマルのまま）
 const FORECAST_TYPE = { はれ: "ほのお", あめ: "みず", ゆき: "こおり" };
 // 攻撃側/防御側: 発動時にフィールドをセット（エレキメイカー＝Electric Surge 等）。発動チェックで計算上のフィールドにする
@@ -354,7 +356,7 @@ const LOW_USAGE_MOVES = new Set([
 const DAMAGE_ABILITIES = new Set([
   ...Object.keys(ABILITY_PINCH), ...Object.keys(ABILITY_SKIN),
   ...Object.keys(ABILITY_IMMUNE), ...Object.keys(ABILITY_TYPE_MUL), ...Object.keys(WEATHER_ABILITY), ...Object.keys(TERRAIN_ABILITY),
-  "てきおうりょく", "ちからもち", "ヨガパワー", "はりきり", "こんじょう", "サンパワー",
+  "てきおうりょく", "ちからもち", "ヨガパワー", "はりきり", "こんじょう", "サンパワー", "メガソーラー",
   "ちからずく", "アナライズ", "テクニシャン", "がんじょうあご", "メガランチャー",
   "てつのこぶし", "すいほう", "マルチスケイル", "フィルター", "ハードロック",
   "ファーコート", "ノーてんき", "エアロック", "へんげんじざい", "リベロ", "すなのちから",
@@ -1028,6 +1030,8 @@ export default function ChampionsDamageCalc() {
     setAtkItem(m.item || "その他"); // 実物の持ち物名のまま反映（攻撃に効かない物は欄で(影響なし)表示）
     setAtkAbility(memberAbility(poke, m.ability)); // メガ適用時はベース特性ではなくメガ形態の特性へ補正
     setAtkAbilityOn(false);
+    // 戦況トグルは別ポケ＝既定に戻す（idx変更effectを抑止しているのでここで明示的に。ランク/急所/やけど等が前のポケから引き継がれるのを防ぐ）
+    setAtkRank(0); setBoostCount(0); setCrit(false); setBurn(false); setHelpingHand(false); setHits(0);
   }
 
   // マイチームのメンバーをぼうぎょ側へ反映（フルSP配分→HP/ぼうぎょ/とくぼう、性格は各防御ステの倍率）
@@ -1046,6 +1050,8 @@ export default function ChampionsDamageCalc() {
     setDefItem(m.item || "その他"); // 実物の持ち物名のまま反映（防御に効かない物は欄で(影響なし)表示）
     setDefAbility(memberAbility(poke, m.ability)); // メガ適用時はベース特性ではなくメガ形態の特性へ補正
     setDefAbilityOn(false);
+    // 戦況トグルは別ポケ＝既定に戻す（idx変更effectを抑止しているのでここで明示的に。ランク/壁が前のポケから引き継がれるのを防ぐ）
+    setDefRank(0); setWall(false);
   }
 
   // 自チームは常に左パネル・敵チームは常に右パネルへ（攻守交代で左右パネルが入れ替わっても固定）。左=spdOwn, 右=spdEnemy。
@@ -1129,7 +1135,11 @@ export default function ChampionsDamageCalc() {
   const moldBreaker = ["かたやぶり", "ターボブレイズ", "テラボルテージ", "きんしのちから"].includes(atkAbilityEff);
   const defAbilityEff = moldBreaker ? "なし" : defAbilityRaw;
   // 天気特性（あめふらし等）が発動中なら計算上の天気をそれにする。手動の天気選択(weatherSel)はフォールバック（かたやぶりは天気を消さない＝raw参照）
-  const weather = WEATHER_ABILITY[atkAbilityEff] || WEATHER_ABILITY[defAbilityRaw] || weatherSel;
+  // メガソーラー（メガニウム(メガ)）: 自分が技を使う時だけ実際の天気に関係なく「にほんばれ(はれ)」扱い（天気欄は変えない＝計算上のみ）
+  const weather = atkAbilityEff === "メガソーラー" ? "はれ" : (WEATHER_ABILITY[atkAbilityEff] || WEATHER_ABILITY[defAbilityRaw] || weatherSel);
+  // 天気を作る特性(ひでり等)を選択した時点で天気欄(weatherSel)をその天気に自動セット（ユーザー要望・フィールド特性がterrainEff経由で自動反映されるのと挙動を揃える）。
+  // 選択時のみ＝以降ユーザーが手動で変えても上書きしない（特性を変えるまで再同期しない）。フィールドは欄の値がterrainEffなので別途同期不要。
+  useEffect(() => { const w = WEATHER_SETTER[atkAbility] || WEATHER_SETTER[defAbility]; if (w) setWeather(w); }, [atkAbility, defAbility]); // eslint-disable-line react-hooks/exhaustive-deps
   // てんきや: 天気でタイプが変わる（ポワルン）。STAB・相性・タイプ表示に反映
   const atkTypes = (atkAbilityEff === "てんきや" && FORECAST_TYPE[weather]) ? [FORECAST_TYPE[weather]]
     : (atkAbilityEff === "ぎたい" && TERRAIN_TO_TYPE[terrainEff]) ? [TERRAIN_TO_TYPE[terrainEff]] // ぎたい: フィールドに合わせて自身のタイプが変化（STAB・相性・タイプ表示に反映）
@@ -1286,6 +1296,7 @@ export default function ChampionsDamageCalc() {
     if (ab === "はりきり" && isPhysicalMove) { aAbilityMul *= 1.5; atkAbNote = "はりきり: 攻撃×1.5"; }
     if (ab === "こんじょう" && isPhysicalMove) { aAbilityMul *= 1.5; ignoreBurn = true; atkAbNote = "こんじょう: 攻撃×1.5・やけど無効"; }
     if (ab === "サンパワー" && !isPhysicalMove && weather === "はれ") { aAbilityMul *= 1.5; atkAbNote = "サンパワー: 特攻×1.5"; }
+    if (ab === "メガソーラー") atkAbNote = "メガソーラー: 自分の技はにほんばれ(はれ)扱い"; // 天気はweather=はれに上書き済み。ほのお技×1.5/みず技×0.5・ソーラービーム無溜め等
     if ((ab === "プラス" || ab === "マイナス") && !isPhysicalMove) { aAbilityMul *= 1.5; atkAbNote = `${ab}: 場に相方 特攻×1.5`; }
     if (ab === "ちからずく" && move.sf) { effPower = f(effPower * 1.3); atkAbNote = "ちからずく 威力×1.3"; } // 追加効果(sf)のある技のみ
     if (ab === "アナライズ") { effPower = f(effPower * 1.3); atkAbNote = "アナライズ 威力×1.3"; }
