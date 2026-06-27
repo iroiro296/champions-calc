@@ -893,6 +893,7 @@ export default function ChampionsDamageCalc() {
   const [atkNature, setAtkNature] = useState(1.1);
   const [atkRank, setAtkRank] = useState(0);
   const [crit, setCrit] = useState(false);
+  const [inferCrit, setInferCrit] = useState(false); // 推定モーダル(攻撃力/耐久力推定)用の急所トグル。本体の急所(crit)とは独立＝逆算だけに効く
   const [burn, setBurn] = useState(false);
   const [helpingHand, setHelpingHand] = useState(false);
   const [hits, setHits] = useState(0); // 0=確率(2〜5回)モード, 1〜5=固定ヒット数
@@ -1369,6 +1370,7 @@ export default function ChampionsDamageCalc() {
   const alwaysCrit = ALWAYS_CRIT_MOVES.has(moveKey);
   const critBlocked = ["シェルアーマー", "カブトアーモ", "カブトアーマー"].includes(defAbilityEff);
   const critEff = critBlocked ? false : (alwaysCrit || crit);
+  const inferCritEff = critBlocked ? false : (alwaysCrit || inferCrit); // 推定(逆算)専用の急所実効値。観測ダメージが急所だった場合のチェック用
 
   // ノーてんき/エアロック: 天候の影響を消す
   const noWeather = ["ノーてんき", "エアロック"].includes(atkAbilityEff) || ["ノーてんき", "エアロック"].includes(defAbilityRaw);
@@ -1526,6 +1528,7 @@ export default function ChampionsDamageCalc() {
   const [healItem, setHealItem] = useState("なし");
   const [excludeDownNat, setExcludeDownNat] = useState(true); // 下降補正(▼0.9)を除外（攻撃/耐久推定で共通・デフォON）
   const inference = useMemo(() => {
+    const critEff = inferCritEff; // 逆算は本体の急所(crit)ではなく推定モーダルの急所(inferCrit)を使う＝以降のcritEff参照を全て切替
     const obs = parseInt(curHpPct, 10);
     if (curHpPct === "" || isNaN(obs) || obs < 0 || obs > 100) return null;
     if (isMulti) return { error: "連続技は逆算非対応です（単発技で計測してください）" };
@@ -1587,7 +1590,7 @@ export default function ChampionsDamageCalc() {
     // 高い順にソート（性格→防SP→HP SP）
     candidates.sort((a, b) => b.nat - a.nat || b.dsp - a.dsp || b.hsp - a.hsp);
     return { count: candidates.length, candidates };
-  }, [curHpPct, healItem, attacker, defender, move, effType, effPower, isPhysical, isMulti, atkSp, atkNature, atkRank, crit, burn, helpingHand, defRank, wall, weather, critEff, lightBall, defItem, atkAbilityEff, defAbilityEff, stabMul, aAbilityMul, ignoreBurn, protean, proteanType, noWeather, isDouble, singleTarget, friendGuard, fairyAuraDouble]);
+  }, [curHpPct, healItem, attacker, defender, move, effType, effPower, isPhysical, isMulti, atkSp, atkNature, atkRank, inferCritEff, burn, helpingHand, defRank, wall, weather, lightBall, defItem, atkAbilityEff, defAbilityEff, stabMul, aAbilityMul, ignoreBurn, protean, proteanType, noWeather, isDouble, singleTarget, friendGuard, fairyAuraDouble]);
 
 
   // ポケモン切替・モード切替時: 常にそのモードの採用率1位の技を既定選択（moveListはcurrentMoveUsageでソート済み）。
@@ -1609,6 +1612,25 @@ export default function ChampionsDamageCalc() {
 
   const removeRecent = (name) => {
     setCurMoveHist((prev) => ({ ...prev, [attacker.name]: (prev[attacker.name] ?? []).filter((n) => n !== name) }));
+  };
+
+  // 攻撃ステ(物理A/特殊C/ボディプレスB)別のSP/性格メモ。物理↔特殊で技を変えた時にSP/性格を引き継がず、各カテゴリの値を保持するため
+  const atkStatMem = useRef({});
+  useEffect(() => { atkStatMem.current = {}; }, [atkIdx]); // ポケが変わったらメモを破棄（別ポケに前ポケのカテゴリ値を持ち越さない）
+  // ユーザーが技を選んだ時の一元ハンドラ。攻撃ステのカテゴリが変わるならSP/性格を引き継がず、そのカテゴリの記憶（無ければ既定32/▲1.1）へ切替（ユーザー要望）
+  const pickMove = (n) => {
+    const nm = M[n];
+    if (nm) {
+      const oldCat = move.bp ? "b" : isPhysical ? "a" : "c";
+      const newCat = nm.bp ? "b" : nm.c === "物理" ? "a" : "c";
+      if (newCat !== oldCat) {
+        atkStatMem.current[oldCat] = { sp: atkSp, nat: atkNature }; // 今のSP/性格を退避
+        const saved = atkStatMem.current[newCat];
+        setAtkSp(saved ? saved.sp : 32);
+        setAtkNature(saved ? saved.nat : 1.1);
+      }
+    }
+    setMoveName(n); recordMove(n);
   };
 
   // 最近使った技（最新順）。下の全技一覧は従来通りすべて表示する
@@ -1678,6 +1700,7 @@ export default function ChampionsDamageCalc() {
   const [exclBandGlasses, setExclBandGlasses] = useState(true); // 攻撃力推定でちからのハチマキ/ものしりメガネ(×1.1)候補を除外（既定オン）
   const [dmgTaken, setDmgTaken] = useState("");
   const atkInference = useMemo(() => {
+    const critEff = inferCritEff; // 逆算は本体の急所ではなく推定モーダルの急所(inferCrit)を使う＝以降のcritEff参照を全て切替
     const dmg = parseInt(dmgTaken, 10);
     if (dmgTaken === "" || isNaN(dmg) || dmg <= 0) return null;
     if (isMulti) return { error: "連続技は逆算非対応です（単発技で計測してください）" };
@@ -1744,7 +1767,7 @@ export default function ChampionsDamageCalc() {
       ...(exclBandGlasses ? [] : [{ label: `${isPhysical ? "ちからのハチマキ" : "ものしりメガネ"}(×1.1)`, item: isPhysical ? "ちからのハチマキ" : "ものしりメガネ", candidates: estimate(f(effPowerNoItem * 1.1), false) }]),
     ];
     return { sets };
-  }, [dmgTaken, attacker, defender, move, effType, effPower, effPowerNoItem, atkItem, atkInferItem, exclBandGlasses, isPhysical, isMulti, atkRank, crit, burn, helpingHand, bSp, dSp, bNature, dNature, defRank, wall, weather, critEff, lightBall, defItem, stabMul, aAbilityMul, ignoreBurn, protean, proteanType, noWeather, defAbilityEff, atkAbilityEff, isDouble, singleTarget, friendGuard, fairyAuraDouble]);
+  }, [dmgTaken, attacker, defender, move, effType, effPower, effPowerNoItem, atkItem, atkInferItem, exclBandGlasses, isPhysical, isMulti, atkRank, inferCritEff, burn, helpingHand, bSp, dSp, bNature, dNature, defRank, wall, weather, lightBall, defItem, stabMul, aAbilityMul, ignoreBurn, protean, proteanType, noWeather, defAbilityEff, atkAbilityEff, isDouble, singleTarget, friendGuard, fairyAuraDouble]);
   // 攻撃力推定モーダルの持ち物トグル（判明といのちのたまは排他＝単一state）。いのちのたまは外側の持ち物欄と同期
   const toggleInferKnown = () => { setAtkItem("なし"); setAtkInferItem(atkInferItem === "known" ? "unknown" : "known"); }; // 判明=タイプ強化系でない→持ち物なし換算
   const toggleInferOrb = () => { const next = atkInferItem === "orb" ? "unknown" : "orb"; setAtkItem(next === "orb" ? "いのちのたま" : "なし"); setAtkInferItem(next); };
@@ -2072,6 +2095,11 @@ export default function ChampionsDamageCalc() {
         .atk-dir-swap{font-size:11px;font-weight:700;color:#9fb0c8;letter-spacing:.06em;white-space:nowrap}
         .swap-sub{font-size:11px;color:#9fb2d6}
         .center-field{display:flex;flex-direction:column;gap:4px}
+        /* 天気/フィールドのボタングリッド（2×2・常時表示・同じものを再クリックで「なし」に戻る） */
+        .wf-grid{display:grid;grid-template-columns:1fr 1fr;gap:5px}
+        .wf-btn{padding:7px 4px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;background:#0e1320;color:#aeb8cc;border:1px solid #2c3854;white-space:nowrap;transition:border-color .1s,color .1s}
+        .wf-btn:hover{border-color:#4a5c80;color:#dbe2ef}
+        .wf-btn.on{color:#fff;border-color:#7da9e6;font-weight:800;box-shadow:inset 0 0 0 1px #7da9e6}
         /* ⚡すばやさ比較（中央列のトリガー＋モーダル） */
         .spd-open-btn{width:100%;padding:9px 6px;border-radius:10px;font-size:12.5px;font-weight:800;letter-spacing:.04em;cursor:pointer;background:#161d2e;color:#9fd0ff;border:1px solid #2c4a6b}
         .spd-open-btn:hover{border-color:#5b9bf0;background:#172339}
@@ -2435,7 +2463,7 @@ export default function ChampionsDamageCalc() {
                   <div className="recent-row">
                     {recentMoves.map((n) => (
                       <span key={n} className={n === moveName ? "recent-chip on" : "recent-chip"}>
-                        <span className="recent-chip-name" onClick={() => { setMoveName(n); recordMove(n); }}>{n}</span>
+                        <span className="recent-chip-name" onClick={() => pickMove(n)}>{n}</span>
                         <button className="recent-chip-x" onClick={() => removeRecent(n)} aria-label={`${n}を履歴から削除`}>✕</button>
                       </span>
                     ))}
@@ -2443,7 +2471,7 @@ export default function ChampionsDamageCalc() {
                 )}
                 {!customOn && (
                   <MoveSearch
-                    moveList={moveList} value={moveName} onChange={(n) => { setMoveName(n); recordMove(n); }} accent={accent}
+                    moveList={moveList} value={moveName} onChange={(n) => pickMove(n)} accent={accent}
                     chipType={effType} usage={usageMapFor(attacker.name, currentMoveUsage)[moveName]}
                     meta={isFixedMove ? `${move.c} / 固定${fixedDmgVal}ダメージ` : `${move.c} / 威力${effPowerNoItem}${move.ws && weather !== "なし" ? "（天気で変化）" : ""}${isMulti ? ` ×${result.hitLabel}回` : ""}`}
                   />
@@ -2858,16 +2886,24 @@ export default function ChampionsDamageCalc() {
               </span>
               <span className="atk-dir-swap">⇅ 攻守交代</span>
             </button>
-            <label className="center-field"><span className="field-label">天気</span>
-              <select className="rank" value={weatherSel} onChange={(e) => setWeather(e.target.value)} style={{ background: WEATHER_SELECT_BG[weatherSel] }}>
-                {["なし","はれ","あめ","すなあらし","ゆき"].map((w) => <option key={w} style={{ background: WEATHER_SELECT_BG[w] || "#0e1320", color: "#e8ecf4" }}>{w}</option>)}
-              </select>
-            </label>
-            <label className="center-field"><span className="field-label">フィールド</span>
-              <select className="rank" value={terrainEff} onChange={(e) => setTerrain(e.target.value)} style={{ background: TERRAIN_PANEL_BG[terrainEff] }}>
-                {["なし","エレキ","グラス","サイコ","ミスト"].map((t) => <option key={t} style={{ background: TERRAIN_PANEL_BG[t] || "#0e1320", color: "#e8ecf4" }}>{t}</option>)}
-              </select>
-            </label>
+            <div className="center-field"><span className="field-label">天気</span>
+              <div className="wf-grid">
+                {["はれ","あめ","すなあらし","ゆき"].map((w) => (
+                  <button key={w} type="button" className={"wf-btn" + (weatherSel === w ? " on" : "")}
+                    style={weatherSel === w ? { background: WEATHER_SELECT_BG[w] } : undefined}
+                    onClick={() => setWeather(weatherSel === w ? "なし" : w)}>{w}</button>
+                ))}
+              </div>
+            </div>
+            <div className="center-field"><span className="field-label">フィールド</span>
+              <div className="wf-grid">
+                {["エレキ","グラス","サイコ","ミスト"].map((t) => (
+                  <button key={t} type="button" className={"wf-btn" + (terrainEff === t ? " on" : "")}
+                    style={terrainEff === t ? { background: TERRAIN_PANEL_BG[t] } : undefined}
+                    onClick={() => setTerrain(terrainEff === t ? "なし" : t)}>{t}</button>
+                ))}
+              </div>
+            </div>
             <button className="spd-open-btn" onClick={() => setShowSpeed(true)} title="すばやさ比較を開く">⚡ すばやさ比較</button>
           </div>
         </div>
@@ -3083,6 +3119,10 @@ export default function ChampionsDamageCalc() {
             </div>
             <span className="cond-note">{atkInferItem === "unknown" ? "不明: なし＋タイプ強化を両方表示" : atkInferItem === "orb" ? "いのちのたま(×1.3)で逆算（持ち物欄もいのちのたまに）" : "威力強化系ではないことが判明"}</span>
           </div>
+          <label className="ck" style={{ marginTop: 4 }} title={critBlocked ? "相手のシェルアーマー等で急所無効" : alwaysCrit ? "確定急所技" : "受けたダメージが急所だった場合にチェック（急所は×1.5・防御ランク上昇を無視して逆算）"}>
+            <input type="checkbox" checked={inferCritEff} disabled={alwaysCrit || critBlocked} onChange={(e) => setInferCrit(e.target.checked)} />
+            急所{alwaysCrit && !critBlocked ? "(確定)" : ""}{critBlocked ? "(無効)" : ""}
+          </label>
           <label className="ck" style={{ marginTop: 4, fontSize: 11.5 }}>
             <input type="checkbox" checked={excludeDownNat} onChange={(e) => setExcludeDownNat(e.target.checked)} />
             下降補正(▼0.9)を除外
@@ -3141,6 +3181,10 @@ export default function ChampionsDamageCalc() {
                 {["なし", "たべのこし", "オボンのみ"].map((x) => <option key={x}>{x}</option>)}
               </select>
             </div>
+            <label className="ck" style={{ paddingBottom: 8 }} title={critBlocked ? "相手のシェルアーマー等で急所無効" : alwaysCrit ? "確定急所技" : "与えたダメージが急所だった場合にチェック（急所は×1.5・相手の防御ランク上昇を無視して逆算）"}>
+              <input type="checkbox" checked={inferCritEff} disabled={alwaysCrit || critBlocked} onChange={(e) => setInferCrit(e.target.checked)} />
+              急所{alwaysCrit && !critBlocked ? "(確定)" : ""}{critBlocked ? "(無効)" : ""}
+            </label>
             <label className="ck" style={{ paddingBottom: 8, fontSize: 11.5 }}>
               <input type="checkbox" checked={excludeDownNat} onChange={(e) => setExcludeDownNat(e.target.checked)} />
               下降補正(▼0.9)を除外
