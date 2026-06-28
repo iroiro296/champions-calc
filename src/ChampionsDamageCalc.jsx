@@ -995,6 +995,7 @@ export default function ChampionsDamageCalc() {
   // これでマイチーム経由でもリスト選択と同様「常にそのポケの正しい特性」になり、特性チェックボックス等のUIが一致値前提で動く。
   const memberAbility = (poke, ability) => ((poke.abilities || []).includes(ability) ? ability : defaultAbility(poke));
   const applyingMemberRef = useRef(false); // マイチーム適用中は特性の自動リセットを抑止
+  const skipMoveDefaultRef = useRef(false); // マイチーム直接選択で登録技をセットした時、atkIdx変更で走る「採用率1位を既定選択」effectを1回だけ抑止
   useEffect(() => {
     if (applyingMemberRef.current) { applyingMemberRef.current = false; return; }
     setAtkAbility(defaultAbility(attacker)); setAtkAbilityOn(false);
@@ -1014,7 +1015,7 @@ export default function ChampionsDamageCalc() {
   useEffect(() => { if (isMega(defender)) setDefItem("その他"); }, [defIdx]);
 
   // マイチームのメンバーをこうげき側へ反映（技カテゴリで攻撃ステ・性格補正を選択）
-  function applyMemberToAttacker(m) {
+  function applyMemberToAttacker(m, keepMove = true) {
     const idx = POKEMON.findIndex((p) => p.name === m.name);
     if (idx < 0) return;
     const poke = POKEMON[idx];
@@ -1024,7 +1025,11 @@ export default function ChampionsDamageCalc() {
     const natureMul = m.nature?.plus === offStat ? 1.1 : m.nature?.minus === offStat ? 0.9 : 1.0;
     if (idx !== atkIdx) applyingMemberRef.current = true; // 特性の自動リセットを1回だけ抑止
     setAtkIdx(idx);
-    if (mv) setMoveName(mv);
+    if (mv) {
+      setMoveName(mv);
+      // 登録技を維持する直接選択時のみ、atkIdx変更で走る「採用率1位を既定選択」effectを1回スキップ（交代復元はkeepMove=falseで既定に戻す）
+      if (keepMove && idx !== atkIdx) skipMoveDefaultRef.current = true;
+    }
     if (attackMoves.length) setCurMoveHist((prev) => ({ ...prev, [m.name]: attackMoves.slice(0, 8) })); // 覚えている攻撃技を全部「最近使った技」に表示（現モードの履歴へ）
     setAtkSp(m.sp?.[offStat] ?? 0);
     setAtkNature(natureMul);
@@ -1598,6 +1603,7 @@ export default function ChampionsDamageCalc() {
   // 履歴では上書きしない＝同じポケでも必ず最有力技を表示。過去に使った技は「最近使った技」チップから手動で選べる。
   // isDoubleを依存に含めることでシングル⇔ダブル切替時も各モードの1位に切り替わる＝完全分離。
   useEffect(() => {
+    if (skipMoveDefaultRef.current) { skipMoveDefaultRef.current = false; return; } // マイチーム直接選択で登録技をセット済みなら上書きしない
     setMoveName(moveList[0]?.name ?? "");
   }, [atkIdx, isDouble]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1822,7 +1828,7 @@ export default function ChampionsDamageCalc() {
       setAtkSp(aSnap.atkSp); setAtkNature(aSnap.atkNature);
       setAtkAbility(aSnap.atkAbility); setAtkAbilityOn(aSnap.atkAbilityOn);
       setAtkRank(aSnap.atkRank ?? 0); setBoostCount(aSnap.boostCount ?? 0); // ランクもポケ別に復元（交代で相手側に引き継がない）
-    } else { const c = cfgFor(newAtkIdx); if (c) applyMemberToAttacker(c); else { setAtkSp(32); setAtkNature(1.1); } setAtkRank(0); setBoostCount(0); } // 登録もスナップも無い攻撃側は既定(32/▲)へ。前の攻撃側のSP/性格を相手側に引き継がない
+    } else { const c = cfgFor(newAtkIdx); if (c) applyMemberToAttacker(c, false); else { setAtkSp(32); setAtkNature(1.1); } setAtkRank(0); setBoostCount(0); } // 登録もスナップも無い攻撃側は既定(32/▲)へ。前の攻撃側のSP/性格を相手側に引き継がない。技は手順3末でリセットするのでkeepMove=false
     // 攻撃側の戦況トグル(急所/やけど/てだすけ/連続回数)もポケ別に復元。スナップ無し＝既定に戻し、相手側へ引き継がない。
     setCrit(aSnap?.crit ?? false); setBurn(aSnap?.burn ?? false); setHelpingHand(aSnap?.helpingHand ?? false); setHits(aSnap?.hits ?? 0);
     // 技は攻守交代で引き継がない（左=自チーム/右=敵チームで別個体扱い＝同じポケでも引き継がない）。
