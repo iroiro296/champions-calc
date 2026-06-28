@@ -1823,17 +1823,23 @@ export default function ChampionsDamageCalc() {
     setAtkIdx(newAtkIdx); setDefIdx(newDefIdx); setAtkOnRight((v) => !v);
     // 3) 新しい攻撃側を復元: スナップショット優先→無ければ登録構成から算出→どちらも無ければ既定(idx変更effectが特性をリセット)
     const aSnap = atkSnapRef.current[newAtkIdx];
+    const atkIdxChanges = newAtkIdx !== atkIdx; // このswapでatkIdxが実際に変わる（=既定技effectが発火する）か
     if (aSnap) {
       applyingMemberRef.current = true;
       setAtkSp(aSnap.atkSp); setAtkNature(aSnap.atkNature);
       setAtkAbility(aSnap.atkAbility); setAtkAbilityOn(aSnap.atkAbilityOn);
       setAtkRank(aSnap.atkRank ?? 0); setBoostCount(aSnap.boostCount ?? 0); // ランクもポケ別に復元（交代で相手側に引き継がない）
-    } else { const c = cfgFor(newAtkIdx); if (c) applyMemberToAttacker(c, false); else { setAtkSp(32); setAtkNature(1.1); } setAtkRank(0); setBoostCount(0); } // 登録もスナップも無い攻撃側は既定(32/▲)へ。前の攻撃側のSP/性格を相手側に引き継がない。技は手順3末でリセットするのでkeepMove=false
+      // 技もSP/性格と同様にポケ別復元（交代で消えない）。既定技(採用率1位)effectの上書きを抑止
+      if (aSnap.moveName) { setMoveName(aSnap.moveName); if (atkIdxChanges) skipMoveDefaultRef.current = true; }
+      else setMoveName(atkIdxChanges ? "" : (moveList[0]?.name ?? ""));
+    } else {
+      const c = cfgFor(newAtkIdx);
+      if (c) applyMemberToAttacker(c, true); // 登録構成があれば登録技も維持（keepMove=true）
+      else { setAtkSp(32); setAtkNature(1.1); setMoveName(atkIdxChanges ? "" : (moveList[0]?.name ?? "")); } // 登録もスナップも無い攻撃側は既定(32/▲・採用率1位)へ
+      setAtkRank(0); setBoostCount(0); // 前の攻撃側のランクを相手側に引き継がない
+    }
     // 攻撃側の戦況トグル(急所/やけど/てだすけ/連続回数)もポケ別に復元。スナップ無し＝既定に戻し、相手側へ引き継がない。
     setCrit(aSnap?.crit ?? false); setBurn(aSnap?.burn ?? false); setHelpingHand(aSnap?.helpingHand ?? false); setHits(aSnap?.hits ?? 0);
-    // 技は攻守交代で引き継がない（左=自チーム/右=敵チームで別個体扱い＝同じポケでも引き継がない）。
-    // 別ポケは空にして効果(moveList/履歴)に既定をセットさせる。同じポケはidx不変で効果が発火しないので、既定(最採用技=moveList[0])を直接セット。
-    setMoveName(defIdx !== atkIdx ? "" : (moveList[0]?.name ?? ""));
     // 4) 新しい防御側を復元
     const dSnap = defSnapRef.current[newDefIdx];
     if (dSnap) {
