@@ -505,7 +505,7 @@ function RankAbilityBtn({ ability, onApply, atkRank, defRank }) {
   const ra = RANK_ABILITIES[ability];
   const tr = ra.affects === "atk" ? atkRank : defRank;
   return (
-    <button type="button" className="rank-ab-btn" style={{ paddingBottom: 8 }} onClick={() => onApply(ability)}
+    <button type="button" className="rank-ab-btn" onClick={() => onApply(ability)}
       title="押すとランク欄に反映（もう一度押すと更に変化）。戻すにはランク欄を直接変更">
       <span>{ra.label}{ra.dir > 0 ? "↑" : "↓"} 発動</span>
       <span className="rank-ab-cur">{ra.affects === "atk" ? "攻撃" : "防御"}ランク {tr > 0 ? `+${tr}` : tr}</span>
@@ -1115,12 +1115,14 @@ export default function ChampionsDamageCalc() {
 
   // 技変更時に状況指定をリセット。威力変動技なら既定威力をセット
   useEffect(() => { setCondOn(false); setCondCount(0); setVarPow(M[moveName]?.va ? String(M[moveName].p) : ""); }, [moveName]);
+  // おはかまいり: ダブル→シングル切替時、選んだ威力(数)がシングル上限(2体=150)を超えていたらクランプ
+  useEffect(() => { if (!isDouble) setCondCount((c) => (c > 2 ? 2 : c)); }, [isDouble]);
   // 特性を変えたら自動発動特性の手動オフを解除（新しい特性はデフォルトでオン）
   useEffect(() => { setAtkAutoOff(false); setProteanType(""); setTracedAbility(""); }, [atkAbility]); // 特性を変えたらへんげんじざいの変化後タイプ・トレースのコピー先もリセット
   useEffect(() => setDefAutoOff(false), [defAbility]);
-  // フィールド特性(エレキメイカー等)はポケ選択で自動発動＝フィールド欄と連動（外せばフィールドも解除）
-  useEffect(() => { if (TERRAIN_ABILITY[atkAbility]) setAtkAbilityOn(true); }, [atkAbility]);
-  useEffect(() => { if (TERRAIN_ABILITY[defAbility]) setDefAbilityOn(true); }, [defAbility]);
+  // 天気特性(ひでり等)・フィールド特性(エレキメイカー等)はポケ選択で自動発動＝発動チェックON＝天気/フィールド欄と連動（チェックを外せば天気/フィールドも解除）
+  useEffect(() => { if (TERRAIN_ABILITY[atkAbility] || WEATHER_SETTER[atkAbility]) setAtkAbilityOn(true); }, [atkAbility]);
+  useEffect(() => { if (TERRAIN_ABILITY[defAbility] || WEATHER_SETTER[defAbility]) setDefAbilityOn(true); }, [defAbility]);
 
   // 自動判定特性は常に計算へ反映（条件は効果処理側で判定）、手動特性はチェックオン時のみ
   const atkAbilityEff = atkAbility === "トレース" ? (tracedAbility || "なし") // トレースはコピー/選択した特性として扱う（常に発動）
@@ -1138,9 +1140,8 @@ export default function ChampionsDamageCalc() {
   // 天気特性（あめふらし等）が発動中なら計算上の天気をそれにする。手動の天気選択(weatherSel)はフォールバック（かたやぶりは天気を消さない＝raw参照）
   // メガソーラー（メガニウム(メガ)）: 自分が技を使う時だけ実際の天気に関係なく「にほんばれ(はれ)」扱い（天気欄は変えない＝計算上のみ）
   const weather = atkAbilityEff === "メガソーラー" ? "はれ" : (WEATHER_ABILITY[atkAbilityEff] || WEATHER_ABILITY[defAbilityRaw] || weatherSel);
-  // 天気を作る特性(ひでり等)を選択した時点で天気欄(weatherSel)をその天気に自動セット（ユーザー要望・フィールド特性がterrainEff経由で自動反映されるのと挙動を揃える）。
-  // 選択時のみ＝以降ユーザーが手動で変えても上書きしない（特性を変えるまで再同期しない）。フィールドは欄の値がterrainEffなので別途同期不要。
-  useEffect(() => { const w = WEATHER_SETTER[atkAbility] || WEATHER_SETTER[defAbility]; if (w) setWeather(w); }, [atkAbility, defAbility]); // eslint-disable-line react-hooks/exhaustive-deps
+  // 天気欄(ボタン)の表示用＝発動中の天気特性を優先、無ければ手動選択(weatherSel)。フィールドのterrainEffと同じ理屈で、特性チェックON/OFFと天気欄が連動する（メガソーラーのはれ上書きは計算用weatherだけ＝表示には出さない）。
+  const weatherDisplay = WEATHER_ABILITY[atkAbilityEff] || WEATHER_ABILITY[defAbilityRaw] || weatherSel;
   // てんきや: 天気でタイプが変わる（ポワルン）。STAB・相性・タイプ表示に反映
   const atkTypes = (atkAbilityEff === "てんきや" && FORECAST_TYPE[weather]) ? [FORECAST_TYPE[weather]]
     : (atkAbilityEff === "ぎたい" && TERRAIN_TO_TYPE[terrainEff]) ? [TERRAIN_TO_TYPE[terrainEff]] // ぎたい: フィールドに合わせて自身のタイプが変化（STAB・相性・タイプ表示に反映）
@@ -2038,8 +2039,6 @@ export default function ChampionsDamageCalc() {
         .low-list{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px;max-width:240px}
         .low-item{font-size:11px;background:#0e1320;border:1px solid #2c3854;border-radius:4px;padding:2px 6px;color:#8fa0bd}
         h1{font-size:20px;font-weight:800;letter-spacing:.04em;margin:0}
-        .sub{font-size:11px;color:#7c879c}
-        .spec{font-size:11px;color:#7c879c;margin:0 0 6px}
         /* 公開直後のお知らせバナー（SHOW_RELEASE_NOTICEで制御） */
         .release-notice{display:flex;align-items:center;gap:10px;margin:2px 0 10px;padding:7px 12px;background:linear-gradient(90deg,rgba(255,150,60,.17),rgba(255,120,60,.06));border:1px solid rgba(255,150,70,.5);border-left:4px solid #ff8a3c;border-radius:9px}
         .release-notice-icon{font-size:18px;line-height:1;flex:none}
@@ -2189,6 +2188,8 @@ export default function ChampionsDamageCalc() {
         .row{display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap;margin-top:8px}
         .field{display:flex;flex-direction:column;gap:4px}
         .ability-line{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+        /* 発動チェックの.ckは旧inline paddingBottom:8で上寄りになっていた→特性selectと縦中央に揃える（inline上書きのため!important）。rank-ab-btnは枠付きボックスなので対称padding(6px上下)のまま中央に文字を置く */
+        .ability-line .ck{padding-bottom:0!important}
         .field-label{font-size:11px;color:#8fa0bd;letter-spacing:.06em}
         .field input{width:64px;background:#0e1320;border:1px solid #2c3854;border-radius:7px;color:#e8ecf4;padding:7px 8px;font-size:14px;font-variant-numeric:tabular-nums}
         .field input[type=checkbox]{width:auto;flex:none;margin:0 2px 0 0;padding:0} /* チェックボックスは数値入力の64px幅を継がない（□と文字が離れるのを防ぐ） */
@@ -2213,7 +2214,9 @@ export default function ChampionsDamageCalc() {
         .rank-step-btn{width:28px;height:32px;flex-shrink:0;border:1px solid #2c3854;background:#1a2336;color:#cfe0ff;border-radius:7px;cursor:pointer;font-size:16px;line-height:1;padding:0}
         .rank-step-btn:hover{border-color:var(--brand);background:#1f2a44}
         .checks{display:flex;gap:14px;flex-wrap:wrap;margin-top:8px}
-        .ck{display:flex;align-items:center;gap:6px;font-size:12px;color:#c4cede;cursor:pointer}
+        .ck{display:flex;align-items:center;gap:3px;font-size:12px;color:#c4cede;cursor:pointer}
+        /* チェックボックスは特性欄中央基準で配置済み（動かさない）。文字側がネイティブ描画でわずかに下寄りに見えるので文字だけ1px上げて光学的に揃える */
+        .ck-t{position:relative;top:-1px}
         .ck input[type=checkbox]{accent-color:var(--accent);margin:0;flex:none}
         .stat-line{font-size:11px;color:#8fa0bd;margin-top:6px;font-variant-numeric:tabular-nums}
         .stat-line b{color:#e8ecf4;font-size:13px}
@@ -2361,7 +2364,6 @@ export default function ChampionsDamageCalc() {
       <div className="wrap">
         <header className="top">
           <h1>ダメージ計算</h1>
-          <span className="sub">ポケモンチャンピオンズ仕様 · Lv50固定 / 個体値31固定 / 能力P制</span>
           <div style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:10, flexShrink:0 }}>
             <div className="seg hd-seg" style={{ alignSelf:"center" }}>
               <button className={!isDouble ? "seg-btn on" : "seg-btn"} onClick={() => setIsDouble(false)}>シングル</button>
@@ -2398,7 +2400,6 @@ export default function ChampionsDamageCalc() {
           </div>
           </div>
         </header>
-        <p className="spec">能力ポイント(SP)は 1ステータス上限32・合計上限66。1SP = 実数値+1。チャンピオンズで習得可能な攻撃技を全収録（{POKEMON.length}匹・{Object.keys(M).length}技）。</p>
 
         {SHOW_RELEASE_NOTICE && !noticeDismissed && (
           <div className="release-notice">
@@ -2563,17 +2564,21 @@ export default function ChampionsDamageCalc() {
                     {condDef.label}（威力×{condDef.mul}）
                   </label>
                 )}
-                {condDef.type === "count" && (
-                  <div className="ck" style={{ cursor: "default", flexWrap: "wrap" }}>
-                    {condDef.label}:
-                    <span className="seg">
-                      {Array.from({ length: condDef.max + 1 }, (_, i) => (
-                        <button key={i} type="button" className={condCount === i ? "seg-btn on" : "seg-btn"} onClick={() => setCondCount(i)}>{i}</button>
-                      ))}
-                    </span>
-                    （威力+{condDef.per}/体）
-                  </div>
-                )}
+                {condDef.type === "count" && (() => {
+                  // 威力をボタンで選び、その威力になる「数」は確認として表示（おはかまいり=シングル最大2体/ダブル最大3体）
+                  const maxCount = moveKey === "おはかまいり" ? (isDouble ? 3 : 2) : condDef.max;
+                  return (
+                    <div className="ck" style={{ cursor: "default", flexWrap: "wrap" }}>
+                      威力:
+                      <span className="seg">
+                        {Array.from({ length: maxCount + 1 }, (_, i) => (
+                          <button key={i} type="button" className={condCount === i ? "seg-btn on" : "seg-btn"} onClick={() => setCondCount(i)}>{move.p + condDef.per * i}</button>
+                        ))}
+                      </span>
+                      <span className="cond-note">→ {condDef.label} {condCount}体</span>
+                    </div>
+                  );
+                })()}
               </div>
             )}
             {isVarMove && (
@@ -2626,16 +2631,24 @@ export default function ChampionsDamageCalc() {
                   </label>
                 )}
                 {varCalc.kind === "ragefist" && (
-                  <label className="ck">これまでに受けた攻撃回数:
-                    <input type="number" className="rank" style={{ width: 62 }} min={0} max={6} value={rageHits} onChange={(e) => setRageHits(e.target.value)} />
-                  </label>
+                  <div className="ck" style={{ cursor: "default", flexWrap: "wrap" }}>
+                    威力:
+                    <span className="seg">
+                      {Array.from({ length: 7 }, (_, i) => (
+                        <button key={i} type="button" className={Number(rageHits) === i ? "seg-btn on" : "seg-btn"} onClick={() => setRageHits(i)}>{50 + 50 * i}</button>
+                      ))}
+                    </span>
+                    <span className="cond-note">→ これまでに受けた攻撃回数 {Math.max(0, Math.min(6, Math.floor(Number(rageHits) || 0)))}回</span>
+                  </div>
                 )}
                 {varCalc.kind === "weight" && (
                   <span className="cond-note">
                     自分 {atkWeightEff}kg{atkWeightEff !== attacker.w ? `(${atkAbility})` : ""} ／ 相手 {defWeightEff}kg{defWeightEff !== defender.w ? `(${defAbility})` : ""}
                   </span>
                 )}
-                <span className="cond-note">→ 威力 <b style={{ color: "#e8ecf4" }}>{varCalcPower}</b>{varCalc.kind === "weight" ? "（自動）" : ""}</span>
+                {varCalc.kind !== "ragefist" && (
+                  <span className="cond-note">→ 威力 <b style={{ color: "#e8ecf4" }}>{varCalcPower}</b>{varCalc.kind === "weight" ? "（自動）" : ""}</span>
+                )}
               </div>
             )}
             {isFixedMove && (
@@ -2673,7 +2686,7 @@ export default function ChampionsDamageCalc() {
                       if (!e.target.checked) setConfirmOff({ side: "atk", ability: atkAbility });
                       else setAtkAutoOff(false);
                     }} />
-                  発動{MANUAL_ABILITIES.has(atkAbility) ? "" : atkAutoOff ? "(オフ中)" : "(自動)"}
+                  <span className="ck-t">発動{MANUAL_ABILITIES.has(atkAbility) ? "" : atkAutoOff ? "(オフ中)" : "(自動)"}</span>
                 </label>
               )}
               {atkAbility === "そうだいしょう" && (
@@ -2822,7 +2835,7 @@ export default function ChampionsDamageCalc() {
                       if (!e.target.checked) { if (defAbility === "マルチスケイル") setDefAutoOff(true); else setConfirmOff({ side: "def", ability: defAbility }); } // マルチスケイルは警告なしで即オフ
                       else setDefAutoOff(false);
                     }} />
-                  発動{MANUAL_ABILITIES.has(defAbility) ? "" : defAutoOff ? "(オフ中)" : "(自動)"}
+                  <span className="ck-t">発動{MANUAL_ABILITIES.has(defAbility) ? "" : defAutoOff ? "(オフ中)" : "(自動)"}</span>
                 </label>
               )}
                 </div>
@@ -2889,9 +2902,9 @@ export default function ChampionsDamageCalc() {
             <div className="center-field"><span className="field-label">天気</span>
               <div className="wf-grid">
                 {["はれ","あめ","すなあらし","ゆき"].map((w) => (
-                  <button key={w} type="button" className={"wf-btn" + (weatherSel === w ? " on" : "")}
-                    style={weatherSel === w ? { background: WEATHER_SELECT_BG[w] } : undefined}
-                    onClick={() => setWeather(weatherSel === w ? "なし" : w)}>{w}</button>
+                  <button key={w} type="button" className={"wf-btn" + (weatherDisplay === w ? " on" : "")}
+                    style={weatherDisplay === w ? { background: WEATHER_SELECT_BG[w] } : undefined}
+                    onClick={() => setWeather(weatherDisplay === w ? "なし" : w)}>{w}</button>
                 ))}
               </div>
             </div>
@@ -3252,6 +3265,8 @@ export default function ChampionsDamageCalc() {
         </div>}
 
         <footer>
+          ポケモンチャンピオンズ仕様 · Lv50固定 / 個体値31固定 / 能力P制<br />
+          能力ポイント(SP)は 1ステータス上限32・合計上限66。1SP = 実数値+1。チャンピオンズで習得可能な攻撃技を全収録（{POKEMON.length}匹・{Object.keys(M).length}技）。<br />
           計算式: HP = floor((種族値×2+31)×50/100)+60+SP ／ 他 = floor((floor((種族値×2+31)×50/100)+5+SP)×性格)<br />
           ダメージ = floor(22×威力×A÷D÷50)+2 に 天気→急所→乱数(85〜100/100の16段階)→一致→相性→やけど→壁 の順で補正（各段階で切り捨て）。連続技は1ヒットごとに乱数を振って合計。<br />
           ステータス・技データは公式ゲーム『Pokémon Champions』に基づきます。習得技は攻撃技のみ・状況依存技は除く。非公式のファンメイドツールです。<br />
